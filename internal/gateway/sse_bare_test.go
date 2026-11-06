@@ -166,3 +166,97 @@ func TestGeminiRelayBareError(t *testing.T) {
 		t.Fatalf("the relayed stream: %s", body)
 	}
 }
+
+type finiteNoNewline struct {
+	prefix string
+	limit  int
+	sent   int
+}
+
+func (r *finiteNoNewline) Read(p []byte) (int, error) {
+	if r.sent >= r.limit {
+		return 0, io.EOF
+	}
+	n := min(len(p), r.limit-r.sent)
+	for i := range p[:n] {
+		pos := r.sent + i
+		if pos < len(r.prefix) {
+			p[i] = r.prefix[pos]
+		} else {
+			p[i] = ' '
+		}
+	}
+	r.sent += n
+	return n, nil
+}
+
+// An unterminated line that starts like a bare JSON value (or continues one
+// started on an earlier line) is released as passthrough once the undecided
+// bytes pass bareLimit, without reading the rest of the stream first (#5484).
+func TestBareErrorCandidateIsBoundedBeforeFirstOutput(t *testing.T) {
+	for _, prefix := range []string{"{", "[", "   {", "\t[", "{\n  \"msg\": \""} {
+		for _, size := range []int{2 << 20, 4 << 20} {
+			source := &finiteNoNewline{prefix: prefix, limit: size}
+			reader := bareErrors(source)
+
+			one := make([]byte, 1)
+			n, err := reader.Read(one)
+			if err != nil {
+				t.Fatalf("prefix %q size %d: Read: %v", prefix, size, err)
+			}
+			if n != 1 || one[0] != prefix[0] {
+				t.Fatalf("prefix %q size %d: got %d bytes (%q), want 1 (%q)", prefix, size, n, one[:n], prefix[:1])
+			}
+			if source.sent > bareLimit+(32<<10) {
+				t.Fatalf("prefix %q size %d: reader consumed %d bytes before first output; bareLimit=%d", prefix, size, source.sent, bareLimit)
+			}
+
+			rest, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatalf("prefix %q size %d: ReadAll: %v", prefix, size, err)
+			}
+			if got := 1 + len(rest); got != size {
+				t.Fatalf("prefix %q size %d: total passthrough %d bytes, want %d", prefix, size, got, size)
+			}
+			if gotPrefix := string(one[:1]) + string(rest[:len(prefix)-1]); gotPrefix != prefix {
+				t.Fatalf("prefix %q size %d: prefix bytes = %q, want %q", prefix, size, gotPrefix, prefix)
+			}
+			if trimmed := strings.TrimLeft(string(rest[len(prefix)-1:]), " "); len(trimmed) != 0 {
+				t.Fatalf("prefix %q size %d: unexpected non-space tail bytes (%d remaining)", prefix, size, len(trimmed))
+			}
+		}
+	}
+
+	// Over-limit candidate followed by a newline and subsequent SSE / bare error
+	// preserves exact byte-for-byte passthrough for the over-limit line and still
+	// recognizes a bare error on the next line.
+	longLine := "{" + strings.Repeat("x", bareLimit+1024) + "\n"
+	tail := "data: {\"ok\":true}\n\n" + agBareError + "\n"
+	out, err := io.ReadAll(bareErrors(strings.NewReader(longLine + tail)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := longLine + "data: {\"ok\":true}\n\ndata: " + agBareError + "\n\n"
+	if string(out) != wantPrefix {
+		t.Fatalf("over-limit passthrough mismatch: len=%d want=%d", len(out), len(wantPrefix))
+	}
+
+	// A multi-line valid error JSON whose short lines cross bareLimit in settle()
+	// is released as passthrough rather than held until the closing brace and
+	// converted into a data event.
+	var multiLineErr strings.Builder
+	multiLineErr.WriteString("{\n  \"error\": {\n    \"code\": 400,\n")
+	chunkLine := "    \"detail\": \"" + strings.Repeat("a", 256<<10) + "\",\n"
+	for multiLineErr.Len() <= bareLimit {
+		multiLineErr.WriteString(chunkLine)
+	}
+	multiLineErr.WriteString("    \"message\": \"bad\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n")
+	overLimitValidErr := multiLineErr.String()
+	outValid, err := io.ReadAll(bareErrors(strings.NewReader(overLimitValidErr)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(outValid) != overLimitValidErr {
+		t.Fatalf("over-limit multi-line valid error was modified: len=%d want=%d", len(outValid), len(overLimitValidErr))
+	}
+}

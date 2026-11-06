@@ -106,6 +106,16 @@ func (b *bareErrorReader) judge(eof bool) {
 			b.in = b.in[:0]
 			b.mid = true
 			return
+		case len(b.bare)+len(b.in) > bareLimit:
+			// a candidate under way that grew past bareLimit: release
+			// what was held and hand the rest of the line on as it comes
+			if b.bare != nil {
+				b.release()
+			}
+			b.out = append(b.out, b.in...)
+			b.in = b.in[:0]
+			b.mid, b.blank = true, false
+			return
 		default:
 			return // held until it ends
 		}
@@ -137,11 +147,12 @@ func (b *bareErrorReader) judge(eof bool) {
 // when it is an error, as it came when it isn't. One grown past
 // bareLimit goes as it came.
 func (b *bareErrorReader) settle() {
+	if len(b.bare) > bareLimit {
+		b.release()
+		return
+	}
 	t := bytes.TrimSpace(b.bare)
 	if !json.Valid(t) {
-		if len(b.bare) > bareLimit {
-			b.release()
-		}
 		return
 	}
 	data, ok := bareError(t)
