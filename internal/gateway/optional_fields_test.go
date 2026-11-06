@@ -68,6 +68,7 @@ func TestOptionalFieldUnsupportedRetried(t *testing.T) {
 			{"plain-status-prefix", `[400] Unknown name "store": Cannot find field.`, 400},
 			{"groq", `{"error":{"message":"The property 'store' is not supported","type":"invalid_request_error"}}`, 400},
 			{"openai", `{"error":{"message":"Unsupported parameter: 'store' is not supported with this model.","param":"store","code":"unsupported_parameter"}}`, 400},
+			{"openai-unquoted-unknown", `{"error":{"code":"unknown_parameter","message":"upstream: Unknown parameter: store","param":"store","type":"invalid_request_error"}}`, 400},
 		} {
 			t.Run(string(proto)+"/"+tt.name, func(t *testing.T) {
 				f := &fake{t: t, reply: optionalFieldReply(proto)}
@@ -148,7 +149,7 @@ func TestOptionalFieldMixedValidation(t *testing.T) {
 }
 
 func TestRefusedOptionalNamesOnlyUnsupportedFields(t *testing.T) {
-	request := []byte(`{"store":false,"metadata":{"session":"synthetic"},"service_tier":"default","prompt_cache_retention":"24h","prompt_cache_options":{"mode":"explicit"},"thinking":{"type":"enabled"}}`)
+	request := []byte(`{"store":false,"metadata":{"session":"synthetic"},"service_tier":"default","prompt_cache_retention":"24h","prompt_cache_options":{"mode":"explicit"},"thinking":{"type":"enabled"},"enable_thinking":true}`)
 	for _, tt := range []struct {
 		name, reply string
 		status      int
@@ -168,6 +169,7 @@ func TestRefusedOptionalNamesOnlyUnsupportedFields(t *testing.T) {
 		{"nested-unknown", `{"error":{"message":"Invalid JSON payload received. Unknown name \"store\" at 'metadata': Cannot find field."}}`, 400, nil},
 		{"other-parameter", `{"error":{"message":"'metadata' is unsupported","param":"model","code":"unsupported_value"}}`, 400, nil},
 		{"other-unsupported-parameter", `{"error":{"message":"Unsupported parameter: 'metadata'","param":"model","code":"unsupported_parameter"}}`, 400, nil},
+		{"other-unknown-parameter", `{"error":{"message":"Unknown parameter: metadata","param":"model","code":"unknown_parameter"}}`, 400, nil},
 		{"unsupported-value", `{"error":{"message":"Unsupported value: 'service_tier' is not supported with this model.","param":"service_tier","code":"unsupported_value"}}`, 400, nil},
 		{"unsupported-value-no-code", `{"error":{"message":"Unsupported value: 'service_tier' is not supported with this model."}}`, 400, nil},
 		// litellm's own, naming the value it turned away before the field (#3978)
@@ -178,7 +180,10 @@ func TestRefusedOptionalNamesOnlyUnsupportedFields(t *testing.T) {
 		{"multiple-extras", `{"detail":[{"type":"extra_forbidden","loc":["body","thinking"],"msg":"Extra inputs are not permitted"},{"type":"extra_forbidden","loc":["body","store"],"msg":"Extra inputs are not permitted"}]}`, 422, []string{"store", "thinking"}},
 		{"root-location", `{"detail":[{"type":"extra_forbidden","loc":["store"],"msg":"Extra inputs are not permitted"}]}`, 422, []string{"store"}},
 		{"unsupported-code", `{"error":{"message":"Not accepted here","code":"unsupported_parameter","param":"store"}}`, 400, []string{"store"}},
+		{"unknown-code", `{"error":{"message":"Not accepted here","code":"unknown_parameter","param":"store"}}`, 400, []string{"store"}},
 		{"codex-unquoted-unsupported-parameter", `{"code":null,"message":"Codex: Unsupported parameter: prompt_cache_retention","param":null,"type":"invalid_request_error"}`, 400, []string{"prompt_cache_retention"}},
+		{"unquoted-unknown-parameter", `{"error":{"code":"unknown_parameter","message":"upstream: Unknown parameter: enable_thinking","param":"enable_thinking","type":"invalid_request_error"}}`, 400, []string{"enable_thinking"}},
+		{"unquoted-unknown-parameter-message-only", `{"error":{"message":"upstream: Unknown parameter: enable_thinking","type":"invalid_request_error"}}`, 400, []string{"enable_thinking"}},
 		// the ChatGPT backend's, as it gave it on 2026-10-14 (#2154)
 		{"openai-bare-name", `{"error":{"message":"prompt_cache_options is not supported on this model","type":"invalid_request_error","param":"prompt_cache_options","code":"invalid_parameter"}}`, 400, []string{"prompt_cache_options"}},
 		{"bare-name-not-leading", `{"error":{"message":"The input said metadata is not supported here"}}`, 400, nil},
