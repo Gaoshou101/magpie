@@ -55,6 +55,11 @@ type caller struct {
 	// compact is DSH's compaction mark as it came, passed on with the
 	// session so the other magpie records the call as one (#2505)
 	compact string
+	// subagent is the Claude Code subagent the call is of and the one
+	// that spawned it (subagentOf), passed on with the session so the
+	// other magpie's Context tells it apart from the main session as this
+	// one does (#5608)
+	subagent [2]string
 	// ua is the User-Agent the request came with, as it came: the one a
 	// provider that passes the agent's on is sent (userAgentFor). From
 	// another magpie, the agent's it named (ClientUAHeader), relayed true.
@@ -111,6 +116,7 @@ func callerFrom(r *http.Request) caller {
 			break
 		}
 	}
+	c.subagent[0], c.subagent[1] = subagentOf(r.Header)
 	c.keepTurn = keepTurnAsks(r)
 	if magpieAsks(r) {
 		if n, err := strconv.Atoi(strings.TrimSpace(r.Header.Get(HopsHeader))); err == nil && n > 0 {
@@ -160,7 +166,9 @@ func boundedSession(v string) string {
 // The session the caller named goes on too, as it named it — magpie's
 // X-Magpie-Session and the agent's own header (session_id, …) — so the
 // other magpie records the call under it and keeps a conversation on its
-// account by it rather than by its first message (#672). Only a remote
+// account by it rather than by its first message (#672), and the Claude
+// Code subagent the call is of, so its Context splits the sessions as this
+// one does (#5608). Only a remote
 // magpie is sent them; a vendor never is. It is asked, too, to name the
 // vendor's model in its reply, as it did before a reply named the model
 // asked for: this magpie records what served the call from it (served,
@@ -185,6 +193,12 @@ func passOnCaller(ctx context.Context, req *http.Request) {
 	}
 	if c.compact != "" {
 		req.Header.Set(dshCompactHeader, c.compact)
+	}
+	if c.subagent[0] != "" {
+		req.Header.Set("x-claude-code-agent-id", c.subagent[0])
+		if c.subagent[1] != "" {
+			req.Header.Set("x-claude-code-parent-agent-id", c.subagent[1])
+		}
 	}
 	if c.agent == "" {
 		return
