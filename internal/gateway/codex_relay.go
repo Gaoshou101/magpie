@@ -57,7 +57,7 @@ func CodexRelay() http.Handler {
 				return
 			}
 			// as codexBackend sends a turn of Codex's own to its sign-in
-			body = plainItemIDs(boundCallIDs(callItemIDs(body)))
+			body = plainItemIDs(foreignFunctionCallIDs(boundCallIDs(callItemIDs(body))))
 			body, _ = codexInput(body, false)
 		}
 		body = withoutClaudeSeals(body)

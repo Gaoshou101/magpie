@@ -211,7 +211,7 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// the ChatGPT backend checks every item id as OpenAI does
-		body = plainItemIDs(boundCallIDs(callItemIDs(body)))
+		body = plainItemIDs(foreignFunctionCallIDs(boundCallIDs(callItemIDs(body))))
 		if rest == "/responses/compact" {
 			// Codex compacts a thread before its first turn back on one of
 			// its own models; the thread's reasoning from another vendor
@@ -3067,13 +3067,72 @@ func callItemIDs(body []byte) []byte {
 	return nb
 }
 
+// foreignFunctionCallIDs is a Responses request whose function_call items
+// carry no id but OpenAI's own kind (fc_…), every other field as it was,
+// and a request with none of them byte for byte (Eleef, #5609): a routing group's Ali/Kimi turn handed
+// Codex a call under an id of another kind ("msg_…"), Codex sends it back
+// on every later turn, and when the group falls back to OpenAI the whole
+// request is turned away — "Invalid 'input[12].id': 'msg_…'. Expected an
+// ID that begins with 'fc'". A function_call's id may be left out
+// (idOptional), so one of another prefix goes without it, and its
+// call_id, which its output names it by, stays as it was. Only an
+// upstream that checks item ids is sent it so (validatesItemIDs, or one
+// that has refused them before).
+func foreignFunctionCallIDs(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`"function_call"`)) {
+		return body
+	}
+	foreign := func(typ, id []byte) bool {
+		return string(typ) == "function_call" && len(id) > 0 && !hasPrefix(id, "fc_")
+	}
+	if !anyInputItem(body, func(it []byte) bool {
+		typ, _ := stringBytes(memberOrNil(it, "type"))
+		id, _ := stringBytes(memberOrNil(it, "id"))
+		return foreign(typ, id)
+	}) {
+		return body
+	}
+	var q map[string]json.RawMessage
+	if json.Unmarshal(body, &q) != nil {
+		return body
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(q["input"], &items) != nil {
+		return body
+	}
+	changed := false
+	for i, raw := range items {
+		var it map[string]json.RawMessage
+		var typ, id string
+		if json.Unmarshal(raw, &it) != nil || json.Unmarshal(it["type"], &typ) != nil ||
+			json.Unmarshal(it["id"], &id) != nil || !foreign([]byte(typ), []byte(id)) {
+			continue
+		}
+		delete(it, "id")
+		if b, err := marshalPlain(it); err == nil {
+			items[i], changed = b, true
+		}
+	}
+	if !changed {
+		return body
+	}
+	q["input"], _ = marshalPlain(items)
+	nb, err := marshalPlain(q)
+	if err != nil {
+		return body
+	}
+	return nb
+}
+
 // itemIDRefusal is OpenAI's refusal of an input item whose id has a
 // character other than [A-Za-z0-9_-], which Copilot passes on as it is
 // (echo_ts, Codex moved from Muse Spark on OpenCode to GPT on Copilot):
 // "Invalid 'input[1].id': 'rs_6aca2fc7533c979d5f0e4f7a:rs_01a125caa544754e9a3c70080100b009'.
 // Expected an ID that contains letters, numbers, underscores, or dashes,
-// but this value contained additional characters."
-var itemIDRefusal = regexp.MustCompile(`(?s)Invalid 'input\[\d+\]\.id'.{0,1000}?Expected an ID that contains letters, numbers, underscores, or dashes`)
+// but this value contained additional characters." — and of a
+// function_call's id of another vendor's kind (#5609): "Invalid
+// 'input[12].id': 'msg_…'. Expected an ID that begins with 'fc'."
+var itemIDRefusal = regexp.MustCompile(`(?s)Invalid 'input\[\d+\]\.id'.{0,1000}?Expected an ID that (?:contains letters, numbers, underscores, or dashes|begins with 'fc')`)
 
 // itemIDsRefused is how unfit remembers a provider turning away, for
 // model, an input item id with another character in it (plainItemIDs).

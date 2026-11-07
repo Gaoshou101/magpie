@@ -6090,9 +6090,11 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		body = callItemIDs(body)
 		// and an item id with a character OpenAI's don't have, another
 		// vendor's (Muse Spark's "rs_…:rs_…"), to an upstream that checks
-		// them (echo_ts)
+		// them (echo_ts), and a function_call's id of another vendor's
+		// kind ("msg_…" from a routing group's Ali/Kimi turn), which
+		// they take only as fc_… (#5609)
 		if validatesItemIDs(p) || !s.fits(p.ID, itemIDsRefused(model), proto) {
-			body = plainItemIDs(body)
+			body = plainItemIDs(foreignFunctionCallIDs(body))
 		}
 		// xAI's API turns away a tool_choice with no tools beside it ("A
 		// tool_choice was set on the request but no tools were specified"),
@@ -6552,9 +6554,10 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		if len(fs) == 0 && len(ms) == 0 && proto == provider.Responses && itemIDRefusal.Match(b) {
 			// and an input item's id with a character OpenAI's don't
 			// have, which a relay in front of OpenAI turns away as it
-			// does (echo_ts): asked once more with ids it takes, and so
+			// does (echo_ts), or a function_call's id not fc_… (#5609):
+			// asked once more with ids it takes, and so
 			// from then on
-			if nb := plainItemIDs(body); !bytes.Equal(nb, body) {
+			if nb := plainItemIDs(foreignFunctionCallIDs(body)); !bytes.Equal(nb, body) {
 				refused = append(refused, itemIDsRefused(model))
 				body = nb
 				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
