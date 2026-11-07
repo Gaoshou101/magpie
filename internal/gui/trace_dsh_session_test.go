@@ -12,10 +12,10 @@ import (
 
 // changqiu4890 on Discord: dsh sends no session id on its chat-completions
 // and messages routes, so the Routing page's requests list put every dsh
-// request under "No session ID". The routes it is served name the dsh
-// session their conversation id was read from, as the Context page does
-// (TestContextDshSessionTitles); another agent's route, and a conversation
-// no file holds, stay as they came.
+// request in the group of those naming no session. The routes it is served
+// name the dsh session their conversation id was read from, as the Context
+// page does (TestContextDshSessionTitles); another agent's route, and a
+// conversation no file holds, stay as they came.
 func TestRoutingDshRoutesNameTheirSession(t *testing.T) {
 	sandboxHome(t)
 	home := t.TempDir()

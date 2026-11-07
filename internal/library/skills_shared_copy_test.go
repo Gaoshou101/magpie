@@ -141,7 +141,7 @@ func TestSharedCopyOtherFolderName(t *testing.T) {
 
 // The user's own hunk-review in ~/.agents/skills differs from the
 // library's (the skills CLI updated it): each reader has one of its own,
-// and the user settles it. Use the library's sets the shared one aside
+// and the user settles it. Taking the library's sets the shared one aside
 // with the backups and gives the library's; Keep leaves the reader the
 // user's, with nothing of the library's beside it.
 func TestSharedOwnSettled(t *testing.T) {

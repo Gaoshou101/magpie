@@ -135,8 +135,8 @@ func pricedRoutes(routes []gateway.Route) []routeJSON {
 // convAgents are the agents whose own session files say which of the
 // gateway's reply and conversation ids are theirs (sessions' ResponseIDs
 // and Convs): dsh's, whose chat-completions and messages routes send no
-// session id (changqiu4890 on Discord: Routing put every dsh request under
-// "No session ID").
+// session id (changqiu4890 on Discord: Routing put every dsh request in
+// the group of requests that name no session).
 var convAgents = map[string]bool{"dsh": true}
 
 // looseKeys are the agent and ids (ownerKey's) a route of such an agent
