@@ -694,6 +694,24 @@ func validateTOML(data []byte) error {
 	return nil
 }
 
+// tomlTrailingComments is the comment lines of block after its last key (or
+// its header, when it has none), with the blank lines among them and from
+// the first comment on: what sits between its body and the next header.
+// Nil when there is no comment there.
+func tomlTrailingComments(lines []string, block tomlTableSpan) []string {
+	from := block.from + 1
+	if n := len(block.keys); n > 0 && block.keys[n-1].to > from {
+		from = block.keys[n-1].to
+	}
+	for from < block.to && strings.TrimSpace(lines[from]) == "" {
+		from++
+	}
+	if from >= block.to {
+		return nil
+	}
+	return trimBlank(append([]string{}, lines[from:block.to]...))
+}
+
 func trimBlank(lines []string) []string {
 	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 		lines = lines[:len(lines)-1]
@@ -821,19 +839,30 @@ func SetTOMLTablesMatching(path string, names, prefixes []string, tables []Table
 		top = blocks[0].from
 	}
 	out := append([]string{}, lines[:top]...)
-	drop, found := false, false
+	gap, found := false, false
 	for _, block := range blocks {
-		was := drop
-		drop = owned(block.name)
-		if drop {
+		if owned(block.name) {
 			found = true
 			out = trimBlank(out)
-		} else if was && len(out) > 0 {
+			gap = true
+			// The comments after an owned table's last key lead into
+			// whatever follows, as another tool's comment-delimited block in
+			// Kimi Code's config.toml does: they are kept, not dropped with
+			// the table (#5614).
+			if lead := tomlTrailingComments(lines, block); len(lead) > 0 {
+				if len(out) > 0 {
+					out = append(out, "")
+				}
+				out = append(out, lead...)
+				gap = false
+			}
+			continue
+		}
+		if gap && len(out) > 0 {
 			out = append(out, "")
 		}
-		if !drop {
-			out = append(out, lines[block.from:block.to]...)
-		}
+		gap = false
+		out = append(out, lines[block.from:block.to]...)
 	}
 	if !found && len(tables) == 0 {
 		return nil
