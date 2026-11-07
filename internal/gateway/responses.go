@@ -1470,6 +1470,11 @@ func buildResponses(r *Request, model, host string, rejectTemp bool) []byte {
 		decodeJSON(r.Text, &text)
 		if r.Format != nil {
 			text["format"] = r.Format.responses()
+		} else if f, _ := text["format"].(map[string]any); f == nil || f["type"] == nil || f["type"] == "" {
+			// a text with no format type (Codex's {"verbosity":"low"}) says
+			// the plain text OpenAI defaults to: Baidu Qianfan refuses a
+			// text.format.type left out (#5600)
+			text["format"] = map[string]any{"type": "text"}
 		}
 		out["text"] = text
 	}
