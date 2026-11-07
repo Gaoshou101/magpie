@@ -58,6 +58,9 @@ func TestKeep(t *testing.T) {
 			func() State { mu.Lock(); defer mu.Unlock(); return st })
 		close(done)
 	}()
+	// ended however the test ends, so a failure doesn't leave it holding
+	// into the tests after this one (#3687)
+	defer func() { cancel(); <-done }()
 	wait := func(n int32, what string) {
 		t.Helper()
 		for end := time.Now().Add(2 * time.Second); held.Load() != n; {
@@ -114,6 +117,7 @@ func TestKeepDisplay(t *testing.T) {
 			func() State { return State{Busy: true} })
 		close(done)
 	}()
+	defer func() { cancel(); <-done }() // as in TestKeep (#3687)
 	waitFor := func(what string, ok func() bool) {
 		t.Helper()
 		for end := time.Now().Add(2 * time.Second); ; {
@@ -144,8 +148,6 @@ func TestKeepDisplay(t *testing.T) {
 	waitFor("system again", func() bool { return len(holds) == 3 && !holds[2] && live == 1 })
 	set(Off)
 	waitFor("off", func() bool { return live == 0 })
-	cancel()
-	<-done
 }
 
 // Turned off, Keep looks at the setting again when it is written, not each
@@ -186,6 +188,19 @@ func TestKeepOffWaitsForTheSetting(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if n := looks.Load(); n != 1 {
 		t.Fatalf("turned off, Keep looked at the setting %d times in 50ms with nothing written", n)
+	}
+	// a write that leaves it off is looked at once, and then Keep waits
+	// again: a Written taken once, not each look, would stay closed after
+	// the first write and Keep would spin while off (#3687)
+	filememo.Forget()
+	for end := time.Now().Add(2 * time.Second); looks.Load() < 2; time.Sleep(time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("turned off, Keep didn't look at the setting again when it was written")
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := looks.Load(); n != 2 {
+		t.Fatalf("turned off, Keep looked at the setting %d times after one write that left it off, want 2", n)
 	}
 	on.Store(true)
 	filememo.Forget()
