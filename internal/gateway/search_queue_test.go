@@ -29,8 +29,11 @@ func TestSearchQueueKeepsCodexAlive(t *testing.T) {
 			fresh(t)
 			release, stopped := make(chan struct{}), make(chan struct{})
 			proceed := make(chan struct{})
-			var once sync.Once
+			var once, proceedOnce sync.Once
 			finish := func() { once.Do(func() { close(release) }) }
+			closeProceed := func() { proceedOnce.Do(func() { close(proceed) }) }
+			t.Cleanup(closeProceed)
+			defer closeProceed()
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer close(stopped)
 				var q struct{ Tools []struct{ Type, Name string } }
@@ -48,7 +51,11 @@ func TestSearchQueueKeepsCodexAlive(t *testing.T) {
 					http.Error(w, "missing tools", 400)
 					return
 				}
-				<-proceed
+				select {
+				case <-proceed:
+				case <-r.Context().Done():
+					return
+				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				io.WriteString(w, "data: "+`{"type":"response.created","response":{"id":"queued","model":"m1","status":"in_progress"}}`+"\n\n")
 				w.(http.Flusher).Flush()
@@ -119,7 +126,7 @@ func TestSearchQueueKeepsCodexAlive(t *testing.T) {
 			if mode == "silent" {
 				time.Sleep(500 * time.Millisecond)
 			}
-			close(proceed)
+			closeProceed()
 			var body strings.Builder
 			pings, completed := 0, false
 			sc := bufio.NewScanner(res.Body)
@@ -167,5 +174,43 @@ func TestSearchQueueKeepsCodexAlive(t *testing.T) {
 				t.Fatalf("queue progress or native tool call lost: pings=%d complete=%v\n%s", pings, completed, body.String())
 			}
 		})
+	}
+}
+
+// #5666: when a client aborts or fails before proceed is closed, the fake upstream
+// handler must watch r.Context().Done() and proceed must be closed in cleanup so
+// up.Close() does not hang.
+func TestSearchQueueUpstreamExitsWhenClientFailsBeforeProceed(t *testing.T) {
+	fresh(t)
+	proceed := make(chan struct{})
+	var proceedOnce sync.Once
+	closeProceed := func() { proceedOnce.Do(func() { close(proceed) }) }
+	t.Cleanup(closeProceed)
+	defer closeProceed()
+
+	stopped := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(stopped)
+		io.Copy(io.Discard, r.Body)
+		select {
+		case <-proceed:
+		case <-r.Context().Done():
+			return
+		}
+	}))
+	defer up.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "POST", up.URL, strings.NewReader("hello"))
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	_, _ = http.DefaultClient.Do(req)
+
+	select {
+	case <-stopped:
+	case <-time.After(1 * time.Second):
+		t.Fatal("fake upstream handler did not exit after client cancel before proceed")
 	}
 }
