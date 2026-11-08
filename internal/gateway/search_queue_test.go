@@ -33,7 +33,6 @@ func TestSearchQueueKeepsCodexAlive(t *testing.T) {
 			finish := func() { once.Do(func() { close(release) }) }
 			closeProceed := func() { proceedOnce.Do(func() { close(proceed) }) }
 			t.Cleanup(closeProceed)
-			defer closeProceed()
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer close(stopped)
 				var q struct{ Tools []struct{ Type, Name string } }
@@ -88,6 +87,7 @@ func TestSearchQueueKeepsCodexAlive(t *testing.T) {
 			}))
 			defer up.Close()
 			defer finish()
+			defer closeProceed()
 			if err := provider.Save(provider.Provider{ID: "fake", Name: "Fake", Key: "fixture", Models: []string{"m1"}, Responses: up.URL + "/v1"}); err != nil {
 				t.Fatal(err)
 			}
@@ -186,12 +186,12 @@ func TestSearchQueueUpstreamExitsWhenClientFailsBeforeProceed(t *testing.T) {
 	var proceedOnce sync.Once
 	closeProceed := func() { proceedOnce.Do(func() { close(proceed) }) }
 	t.Cleanup(closeProceed)
-	defer closeProceed()
 
-	stopped := make(chan struct{})
+	entered, stopped := make(chan struct{}), make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(stopped)
 		io.Copy(io.Discard, r.Body)
+		close(entered)
 		select {
 		case <-proceed:
 		case <-r.Context().Done():
@@ -199,14 +199,23 @@ func TestSearchQueueUpstreamExitsWhenClientFailsBeforeProceed(t *testing.T) {
 		}
 	}))
 	defer up.Close()
+	defer closeProceed()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "POST", up.URL, strings.NewReader("hello"))
 	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
+		select {
+		case <-entered:
+			cancel()
+		case <-time.After(2 * time.Second):
+			cancel()
+		}
 	}()
-	_, _ = http.DefaultClient.Do(req)
+	_, err := http.DefaultClient.Do(req)
+	if err == nil {
+		t.Fatal("expected client request to fail due to context cancellation")
+	}
 
 	select {
 	case <-stopped:
