@@ -177,6 +177,7 @@ func matchedLocalLegacy(gateway *rowChunk, chunks []*rowChunk, skip map[rowRef]b
 		if s == "" {
 			s = r.Session
 		}
+		s = matchSession(s)
 		if s != "" {
 			bySession[s] = append(bySession[s], i)
 		}
@@ -221,7 +222,7 @@ func matchedLocalLegacy(gateway *rowChunk, chunks []*rowChunk, skip map[rowRef]b
 			if skip[ref] || matched[ref] || p.Time().Before(since) {
 				continue
 			}
-			s := c.Strings[c.text(&p, 13)]
+			s := matchSession(c.Strings[c.text(&p, 13)])
 			if len(bySession[s]) == 0 {
 				continue
 			}

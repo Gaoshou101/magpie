@@ -2056,6 +2056,12 @@ func agyLocal(a string) bool { return a == "agy" || a == "antigravity" }
 // second, where every other session file's time is when its call ended.
 const agyStepLongest = 30 * time.Minute
 
+// matchSession normalizes session IDs for matching, stripping the "sess_" prefix
+// used by ZCode databases so a bare request ID matches its local session (#5723).
+func matchSession(s string) string {
+	return strings.TrimPrefix(s, "sess_")
+}
+
 func matchedLocal(gateway *rowChunk, chunks []*rowChunk, skip refSet, since time.Time) refSet {
 	return matchedBlocks([]*rowChunk{gateway}, chunks, skip, nil, since, true)
 }
@@ -2194,6 +2200,8 @@ func matchedBlocks(gateways []*rowChunk, chunks []*rowChunk, skip refSet, respon
 		}
 		if session == "" && agyGateway(gateway.Strings[gateway.text(p, 0)]) {
 			session = agyMatchSession
+		} else {
+			session = matchSession(session)
 		}
 		if session == "" {
 			return matchKey{}, false
@@ -2283,11 +2291,14 @@ func matchedBlocks(gateways []*rowChunk, chunks []*rowChunk, skip refSet, respon
 			if p.Tokens[0]+p.Tokens[1]+p.Tokens[2]+p.Tokens[3] == 0 && !failed {
 				continue
 			}
-			key := matchKey{session: c.Strings[c.text(p, 13)], tokens: matchTokens(p.Tokens), failed: failed}
+			session := c.Strings[c.text(p, 13)]
 			from, to := p.Time().Add(-2*time.Second), p.Time().Add(2*time.Second)
 			if agyLocal(c.Strings[c.text(p, 0)]) {
-				key.session, to = agyMatchSession, p.Time().Add(agyStepLongest)
+				session, to = agyMatchSession, p.Time().Add(agyStepLongest)
+			} else {
+				session = matchSession(session)
 			}
+			key := matchKey{session: session, tokens: matchTokens(p.Tokens), failed: failed}
 			count, at := 0, int32(0)
 			// Without a local ID either gateway partition can match. With an ID,
 			// only an unnamed gateway call can match (different IDs stay distinct).

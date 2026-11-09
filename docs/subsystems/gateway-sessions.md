@@ -257,8 +257,10 @@ capabilities to a gateway row. Verification: `TestDesktopSessionTitles`,
 
 A ZCode request names its session without the `sess_` prefix ZCode's
 database gives it, so `Titles` looks a `zcode:` key up under both and
-answers under the id asked for (#5195). Verification:
-`TestZCodeTitlesByRequestID`.
+answers under the id asked for (#5195). Usage matching normalizes the
+prefix as well, pairing a gateway call with its local ZCode database row
+instead of counting both (#5723). Verification:
+`TestZCodeTitlesByRequestID`, `TestZCodeSessionThroughMagpieCountedOnce`.
 
 Routing's stage names the session an account is serving (connor_yang on
 Discord): a row answering, or that answered, the request shown adds that
