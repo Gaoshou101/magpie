@@ -620,3 +620,90 @@ func TestBiliVersionPastItsWarnings(t *testing.T) {
 		}
 	}
 }
+
+// TestBiliPathWindowsBunAndNpm (#6046, oneness0): on Windows, billion-context
+// installed globally via Bun creates bili.exe in ~/.bun/bin, whereas npm
+// creates bili.cmd in %APPDATA%/npm. biliPath must find both on PATH or in
+// their respective default global install folders.
+func TestBiliPathWindowsBunAndNpm(t *testing.T) {
+	t.Run("windows bun on PATH", func(t *testing.T) {
+		h := t.TempDir()
+		binDir := filepath.Join(h, "custom-bin")
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		exe := filepath.Join(binDir, "bili.exe")
+		if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", binDir)
+		proc.Forget()
+		defer proc.Forget()
+
+		got := biliPathFor("windows", h, "")
+		if got != exe {
+			t.Fatalf("biliPathFor(windows) = %q, want %q", got, exe)
+		}
+	})
+
+	t.Run("windows bun off PATH in bun folder", func(t *testing.T) {
+		h := t.TempDir()
+		bunBin := filepath.Join(h, ".bun", "bin")
+		if err := os.MkdirAll(bunBin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		exe := filepath.Join(bunBin, "bili.exe")
+		if err := os.WriteFile(exe, []byte("fake"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		proc.Forget()
+		defer proc.Forget()
+
+		got := biliPathFor("windows", h, "")
+		if got != exe {
+			t.Fatalf("biliPathFor(windows) in ~/.bun/bin = %q, want %q", got, exe)
+		}
+	})
+
+	t.Run("windows npm in APPDATA", func(t *testing.T) {
+		h := t.TempDir()
+		appdata := filepath.Join(h, "AppData", "Roaming")
+		npmBin := filepath.Join(appdata, "npm")
+		if err := os.MkdirAll(npmBin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cmd := filepath.Join(npmBin, "bili.cmd")
+		if err := os.WriteFile(cmd, []byte("fake"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		proc.Forget()
+		defer proc.Forget()
+
+		got := biliPathFor("windows", h, appdata)
+		if got != cmd {
+			t.Fatalf("biliPathFor(windows) in APPDATA/npm = %q, want %q", got, cmd)
+		}
+	})
+
+	t.Run("unix bun in dot-bun bin", func(t *testing.T) {
+		h := t.TempDir()
+		bunBin := filepath.Join(h, ".bun", "bin")
+		if err := os.MkdirAll(bunBin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		bin := filepath.Join(bunBin, "bili")
+		if err := os.WriteFile(bin, []byte("fake"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		proc.Forget()
+		defer proc.Forget()
+
+		got := biliPathFor("linux", h, "")
+		if got != bin {
+			t.Fatalf("biliPathFor(linux) in ~/.bun/bin = %q, want %q", got, bin)
+		}
+	})
+}

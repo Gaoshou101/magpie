@@ -118,20 +118,41 @@ var biliMu sync.Mutex
 // documented install (npm -g with ~/.local as the prefix) puts it, which
 // may not be on magpie's PATH yet.
 var biliPath = func() string {
-	name := "bili"
-	if runtime.GOOS == "windows" {
-		name = "bili.cmd"
+	return biliPathFor(runtime.GOOS, home(), appdir.Getenv("APPDATA"))
+}
+
+func biliPathFor(goos, homeDir, appData string) string {
+	names := []string{"bili"}
+	var dirs []string
+	if homeDir != "" {
+		dirs = append(dirs,
+			filepath.Join(homeDir, ".local", "bin"),
+			filepath.Join(homeDir, ".bun", "bin"),
+		)
 	}
-	if p, err := proc.Look(name); err == nil {
-		return p
+	if goos == "windows" {
+		names = []string{"bili.cmd", "bili.exe"}
+		dirs = nil
+		if appData != "" {
+			dirs = append(dirs, filepath.Join(appData, "npm"))
+		}
+		if homeDir != "" {
+			dirs = append(dirs,
+				filepath.Join(homeDir, ".bun", "bin"),
+				filepath.Join(homeDir, ".local", "bin"),
+			)
+		}
 	}
-	dirs := []string{filepath.Join(home(), ".local", "bin")}
-	if runtime.GOOS == "windows" {
-		dirs = []string{filepath.Join(appdir.Getenv("APPDATA"), "npm")}
+	for _, name := range names {
+		if p, err := proc.Look(name); err == nil {
+			return p
+		}
 	}
 	for _, d := range dirs {
-		if p := filepath.Join(d, name); exists(p) {
-			return p
+		for _, name := range names {
+			if p := filepath.Join(d, name); exists(p) {
+				return p
+			}
 		}
 	}
 	return ""
