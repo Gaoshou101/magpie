@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -87,7 +88,8 @@ func fakeServing(t *testing.T, pid int) string {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
 	t.Setenv("MAGPIE_ADDR", "")
 	m := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
@@ -97,6 +99,22 @@ func fakeServing(t *testing.T, pid int) string {
 		fmt.Fprintf(w, `{"name":"magpie","version":"v9.9.9","pid":%d,"serves":"web"}`, pid)
 	}))
 	t.Cleanup(m.Close)
+
+	// An unused port so fallback gateway.URL (settings.SavedAddr) doesn't reach a running host gateway
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	dir := filepath.Join(cfg, "magpie")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), fmt.Appendf(nil, "{\"port\":%d}\n", port), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	return strings.TrimPrefix(m.URL, "http://")
 }
 
@@ -183,5 +201,48 @@ func TestStatusJSON(t *testing.T) {
 	}
 	if _, err := runOut(t, "status", "--nope"); err == nil {
 		t.Error("an unknown flag was taken")
+	}
+}
+
+// Issue #6223: a magpie already running on the host's 127.0.0.1:3425 must not
+// bleed into the sandbox tests that ask the gateway without MAGPIE_ADDR.
+func TestSandboxTestsIsolatedFromHostGateway(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:3425")
+	if err != nil {
+		t.Skip("127.0.0.1:3425 already taken by another process:", err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"name":"magpie","version":"0.1.3770","pid":9999,"serves":"app"}`)
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+
+	addr := fakeServing(t, 4242)
+	// 1. Stale / mismatched pid note must fail healthcheck even though 3425 is answering
+	writeListening(t, addr, 777)
+	if err := run([]string{"healthcheck"}); err == nil {
+		t.Error("healthcheck succeeded despite mismatched pid in gateway.json (reached host gateway)")
+	}
+
+	// 2. Restarting gateway.URL() must say isn't running rather than asking 3425
+	if got := restartRunning(gateway.URL(), "v9.9.10"); !strings.Contains(got, "isn't running") {
+		t.Errorf("restartRunning(gateway.URL()) asked host gateway: %q", got)
+	}
+
+	// 3. updateBase without record falls back to candidate, not host 3425
+	oldProbe, oldCands := updateProbe, updateCandidates
+	t.Cleanup(func() { updateProbe, updateCandidates = oldProbe, oldCands })
+	cand := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"name":"magpie","version":"v0.1.3600"}`)
+	}))
+	defer cand.Close()
+	updateProbe = func(u string) bool { return gateway.ServedAt(u).Running }
+	updateCandidates = func() []string { return []string{"http://127.0.0.1:1", cand.URL} }
+	if err := os.Remove(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "magpie", "gateway.json")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if got := updateBase(""); got != cand.URL {
+		t.Errorf("updateBase = %q, want candidate %q", got, cand.URL)
 	}
 }
