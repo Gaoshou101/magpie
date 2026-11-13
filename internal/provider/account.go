@@ -1599,7 +1599,7 @@ func copilotProvider(app copilotApp, plan string) Provider {
 	// /responses alone, Claude's on /v1/messages and /chat/completions (its
 	// model list says; see Provider.APIs)
 	base := copilotBaseOf(app.Host)
-	return Provider{ID: "copilot", Name: "Copilot", Icon: "githubcopilot", Chat: base, Responses: base, Anthropic: base, Website: "https://github.com/features/copilot", Account: acct}
+	return Provider{ID: "copilot", Name: "Copilot", Icon: "githubcopilot", Chat: base, Responses: base, Anthropic: base, Catalog: "github-copilot", Website: "https://github.com/features/copilot", Account: acct}
 }
 
 // copilotNoEndpoint is Copilot's /v1/messages turning away a model it

@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/catalog"
 )
 
 // A second Copilot account, signed in from magpie with GitHub's device
@@ -114,5 +118,35 @@ func TestCopilotAccounts(t *testing.T) {
 	}
 	if got := users(); got != "octocat*+" {
 		t.Fatalf("after forget: %s", got)
+	}
+}
+
+// #6388: copilot provider must declare Catalog: "github-copilot" so that models
+// that refuse temperature (e.g. gpt-6-luna) have RejectsTemperature == true.
+func TestCopilotProviderCatalogRejectsTemperature(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{
+		"github-copilot": {"id": "github-copilot", "models": {"gpt-6-luna": {"id": "gpt-6-luna", "temperature": false}}}
+	}`
+	if err := os.WriteFile(catalog.CachePath(), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+
+	app := copilotApp{User: "octocat"}
+	p := copilotProvider(app, "Pro")
+	if p.Catalog != "github-copilot" {
+		t.Errorf("copilotProvider().Catalog = %q, want %q", p.Catalog, "github-copilot")
+	}
+	if !p.RejectsTemperature("gpt-6-luna") {
+		t.Errorf("p.RejectsTemperature(\"gpt-6-luna\") = false, want true")
 	}
 }
