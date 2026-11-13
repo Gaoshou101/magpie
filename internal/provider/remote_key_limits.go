@@ -246,7 +246,7 @@ func keyWindowName(what, period string) string {
 
 // askRemoteKeyLimit asks p's gateway, with key, for that key's limit.
 func askRemoteKeyLimit(ctx context.Context, p Provider, key string) (*remoteKeyAnswer, error) {
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(p.Via(ctx), 8*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.Anthropic+RemoteKeyLimitPath, nil)
 	if err != nil {

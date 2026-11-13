@@ -517,7 +517,7 @@ func remoteBody(ctx context.Context, p Provider, method, path string, wait time.
 // remoteBodyAs is remoteBody for an answer of up to max bytes, and with
 // noShare as the word for a remote that doesn't have the path.
 func remoteBodyAs(ctx context.Context, p Provider, method, path string, wait time.Duration, max int64, noShare string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, wait)
+	ctx, cancel := context.WithTimeout(p.Via(ctx), wait)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, p.Anthropic+path, nil)
 	if err != nil {

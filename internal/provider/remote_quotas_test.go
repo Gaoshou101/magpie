@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/netproxy"
+	"io"
 )
 
 // fakePeer is another magpie's gateway as RemoteCards asks it: its kept
@@ -774,5 +776,71 @@ func TestRemoteUsageOnlyProviderStillShowsItsCard(t *testing.T) {
 	}
 	if !got["office/claude"] || !got["office/codex"] {
 		t.Fatalf("nothing picked: every card of the remote is told: %v", got)
+	}
+}
+
+type rtFunc func(*http.Request) (*http.Response, error)
+
+func (f rtFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+// #6387: remote magpie quota and key-limit requests must respect the provider proxy
+// rather than defaulting to empty context choice (which bypasses LAN).
+func TestRemoteQuotasAndKeyLimitsUseProviderProxy(t *testing.T) {
+	wantProxy := "http://127.0.0.1:17890"
+	p := Provider{
+		ID:        "office",
+		Name:      "Office",
+		Preset:    RemoteMagpiePreset,
+		Proxy:     wantProxy,
+		Anthropic: "http://192.168.50.10:3425",
+		Key:       "test-secret",
+	}
+
+	var mu sync.Mutex
+	var gotQuotasProxy, gotKeyLimitProxy string
+
+	origTransport := http.DefaultClient.Transport
+	t.Cleanup(func() {
+		http.DefaultClient.Transport = origTransport
+	})
+
+	http.DefaultClient.Transport = rtFunc(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch req.URL.Path {
+		case RemoteCardsPath:
+			gotQuotasProxy = netproxy.Choice(req.Context())
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`[]`)),
+				Header:     make(http.Header),
+			}, nil
+		case RemoteKeyLimitPath:
+			gotKeyLimitProxy = netproxy.Choice(req.Context())
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"limited":false}`)),
+				Header:     make(http.Header),
+			}, nil
+		default:
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("not found")),
+				Header:     make(http.Header),
+			}, nil
+		}
+	})
+
+	ctx := t.Context()
+	_, _ = remoteBodyAs(ctx, p, http.MethodGet, RemoteCardsPath, 2*time.Second, 1<<20, "cards")
+	if gotQuotasProxy != wantProxy {
+		t.Errorf("remoteBodyAs proxy choice = %q, want %q", gotQuotasProxy, wantProxy)
+	}
+
+	_, _ = askRemoteKeyLimit(ctx, p, p.Key)
+	if gotKeyLimitProxy != wantProxy {
+		t.Errorf("askRemoteKeyLimit proxy choice = %q, want %q", gotKeyLimitProxy, wantProxy)
 	}
 }
