@@ -283,6 +283,7 @@ type rRequest struct {
 	ClientMetadata       json.RawMessage `json:"client_metadata,omitempty"`
 	AccessPrograms       json.RawMessage `json:"access_programs,omitempty"`
 	Text                 json.RawMessage `json:"text,omitempty"`
+	Stop                 json.RawMessage `json:"stop,omitempty"`
 	Reasoning            *struct {
 		Effort  string `json:"effort,omitempty"`
 		Summary string `json:"summary,omitempty"`
@@ -345,6 +346,12 @@ func readResponsesFor(body []byte, facts, keepInstructions bool) (*Request, erro
 		TopP: q.TopP, Stream: q.Stream, Parallel: q.ParallelToolCalls, Fast: q.ServiceTier == "priority" || q.ServiceTier == "ultrafast", Ultrafast: q.ServiceTier == "ultrafast", Tier: q.ServiceTier, CacheKey: q.PromptCacheKey, Include: q.Include,
 		ClientMetadata: sentRaw(q.ClientMetadata), AccessPrograms: q.AccessPrograms}
 	r.Text, r.Format = textFormat(sentRaw(q.Text))
+	var stop string
+	if decodeJSON(q.Stop, &stop) == nil && stop != "" {
+		r.Stop = []string{stop}
+	} else {
+		decodeJSON(q.Stop, &r.Stop)
+	}
 	if q.Instructions != "" {
 		r.systemParts = []string{q.Instructions}
 	}
@@ -1501,6 +1508,9 @@ func buildResponses(r *Request, model, host string, rejectTemp bool) []byte {
 	}
 	if r.MaxTokens > 0 {
 		out["max_output_tokens"] = r.MaxTokens
+	}
+	if len(r.Stop) > 0 {
+		out["stop"] = r.Stop
 	}
 	if !rejectTemp {
 		if r.Temp != nil {
