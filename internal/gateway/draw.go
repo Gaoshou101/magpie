@@ -672,11 +672,13 @@ func (d *drawing) extraOf(k string, v any) {
 
 // drawn is what a vendor gave back.
 type drawn struct {
-	Images  []picture
-	Text    string // what a chat model said besides
-	Revised string // the prompt as an images API rewrote it
-	Input   int
-	Output  int
+	Images           []picture
+	Text             string // what a chat model said besides
+	Revised          string // the prompt as an images API rewrote it
+	Input            int
+	Output           int
+	InputTextTokens  int
+	InputImageTokens int
 }
 
 func (s *Server) images(edit bool) http.HandlerFunc {
@@ -876,8 +878,21 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 			}
 			data = append(data, e)
 		}
+		textTokens := out.InputTextTokens
+		imageTokens := out.InputImageTokens
+		if textTokens == 0 && imageTokens == 0 {
+			textTokens = out.Input
+		}
 		res := map[string]any{"created": start.Unix(), "model": p.ID + "/" + model, "data": data,
-			"usage": map[string]int{"input_tokens": out.Input, "output_tokens": out.Output, "total_tokens": out.Input + out.Output}}
+			"usage": map[string]any{
+				"input_tokens":  out.Input,
+				"output_tokens": out.Output,
+				"total_tokens":  out.Input + out.Output,
+				"input_tokens_details": map[string]int{
+					"text_tokens":  textTokens,
+					"image_tokens": imageTokens,
+				},
+			}}
 		if out.Text != "" {
 			res["text"] = out.Text
 		}
@@ -1852,10 +1867,14 @@ func readImagesAnswer(p provider.Provider, url string, b []byte, code int) (draw
 		} `json:"data"`
 		OutputFormat string `json:"output_format"`
 		Usage        struct {
-			Input      int `json:"input_tokens"`
-			Output     int `json:"output_tokens"`
-			Prompt     int `json:"prompt_tokens"`
-			Completion int `json:"completion_tokens"`
+			Input              int `json:"input_tokens"`
+			Output             int `json:"output_tokens"`
+			Prompt             int `json:"prompt_tokens"`
+			Completion         int `json:"completion_tokens"`
+			InputTokensDetails struct {
+				TextTokens  int `json:"text_tokens"`
+				ImageTokens int `json:"image_tokens"`
+			} `json:"input_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(b, &res); err != nil {
@@ -1868,7 +1887,17 @@ func readImagesAnswer(p provider.Provider, url string, b []byte, code int) (draw
 	if output == 0 {
 		output = res.Usage.Completion
 	}
-	out := drawn{Input: input, Output: output}
+	textTokens := res.Usage.InputTokensDetails.TextTokens
+	imageTokens := res.Usage.InputTokensDetails.ImageTokens
+	if textTokens == 0 && imageTokens == 0 && input > 0 {
+		textTokens = input
+	}
+	out := drawn{
+		Input:            input,
+		Output:           output,
+		InputTextTokens:  textTokens,
+		InputImageTokens: imageTokens,
+	}
 	for _, e := range res.Data {
 		if e.Revised != "" {
 			out.Revised = e.Revised
@@ -2284,6 +2313,8 @@ func (s *Server) eachDrawing(n int, ask func() (drawn, int, error)) (drawn, int,
 	for _, r := range results {
 		out.Input += r.out.Input
 		out.Output += r.out.Output
+		out.InputTextTokens += r.out.InputTextTokens
+		out.InputImageTokens += r.out.InputImageTokens
 		out.Images = append(out.Images, r.out.Images...)
 		if r.out.Text != "" && out.Text == "" {
 			out.Text = r.out.Text
