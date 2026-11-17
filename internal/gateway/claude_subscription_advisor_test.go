@@ -3,14 +3,22 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/tidwall/gjson"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // Claude Code's /advisor through a Claude subscription (recih on X,
@@ -201,5 +209,144 @@ func TestClaudeRunSearchAskedAsTheCaller(t *testing.T) {
 	}
 	if len(asked) != 1 || asked[0].KeyID != "friend" || asked[0].Limit == nil {
 		t.Fatalf("the search was asked as %+v, not the client's key", asked)
+	}
+}
+
+// An advisor model named with a fixed effort suffix (swordencao, #6851:
+// claude/claude-fable-5-2:high[1m]) keeps its 4096-token reply cap without
+// clamping that effort down to low through a 4095-token thinking budget:
+// the Claude subscription bridge runs at --effort high, a translated
+// advisor receives reasoning_effort high with max_tokens 4096, an adaptive
+// Claude on Messages receives adaptive thinking at high, and an older
+// Claude on Messages still receives only its budget without output_config.
+func TestClaudeAdvisorHonorsFixedEffort(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script stands in for Claude Code")
+	}
+	u := advisedSetup(t)
+	noRests()
+	t.Cleanup(noRests)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	oauth := map[string]any{"claudeAiOauth": map[string]any{
+		"accessToken": "tok-adv", "refreshToken": "tok-adv-refresh",
+		"expiresAt": time.Now().Add(8 * time.Hour).UnixMilli(), "subscriptionType": "max",
+	}}
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), mustJSON(oauth), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), mustJSON(map[string]any{
+		"oauthAccount": map[string]any{"emailAddress": "adv@example.com", "accountUuid": "u-adv"},
+	}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	argsFile := filepath.Join(bin, "args")
+	script := `#!/bin/sh
+case "$1" in auth) exit 1;; esac
+echo "$@" >> '` + argsFile + `'
+while read -r line; do
+  echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m","model":"claude-fable-5-2","usage":{"input_tokens":1}}}}'
+  echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Check the tests first."}}}'
+  echo '{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}}'
+  echo '{"type":"stream_event","event":{"type":"message_stop"}}'
+  echo '{"type":"result","subtype":"success","is_error":false,"result":""}'
+done
+`
+	testenv.Program(t, filepath.Join(bin, "claude"), script)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	provider.ForgetAccounts()
+	t.Cleanup(provider.ForgetAccounts)
+
+	var anthMu sync.Mutex
+	var anthBodies []string
+	anthSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		anthMu.Lock()
+		anthBodies = append(anthBodies, string(b))
+		anthMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"Check the tests first."}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":4}}`)
+	}))
+	t.Cleanup(anthSrv.Close)
+	if err := provider.Save(provider.Provider{
+		ID: "anth", Name: "Anth", Key: "k", Anthropic: anthSrv.URL,
+		Models: []string{"claude-fable-5-2", "claude-sonnet-4-5"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SaveGroup(provider.Group{
+		ID: "adv-grp", Name: "AdvGrp", Members: []string{"adv/adv-pro"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	q, err := bridgeRequest(httptest.NewRequest("POST", "/v1/messages", nil), provider.Anthropic, "Claude Code",
+		[]byte(advisorTurn("claude/claude-sonnet-5-5", "claude/claude-fable-5-2:high[1m]")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Advisor != "claude/claude-fable-5-2:high" {
+		t.Fatalf("advisor parsed as %q, want claude/claude-fable-5-2:high", q.Advisor)
+	}
+	if !advisedInBridge(provider.Anthropic, []byte(advisorTurn("claude/claude-sonnet-5-5", "group/adv-grp:high"))) {
+		t.Error("a routing group advisor with an explicit :high suffix was dropped")
+	}
+
+	s := New()
+	t.Cleanup(s.subscription.abortAll)
+	advice, err := s.advise(context.Background(), q, nil, q.Advisor)
+	if err != nil || advice != "Check the tests first." {
+		t.Fatalf("claude subscription advisor: %q, %v", advice, err)
+	}
+	rawArgs, _ := os.ReadFile(argsFile)
+	if !strings.Contains(" "+strings.TrimSpace(string(rawArgs))+" ", " --effort high ") {
+		t.Errorf("Claude Code run was not started at --effort high: %s", rawArgs)
+	}
+	if rt := lastRoute(s); len(rt.Tries) != 1 || rt.Tries[0].Fixed != "high" || rt.Tries[0].Effort != "high" {
+		t.Errorf("subscription advisor route = %+v, want Fixed=high Effort=high", rt.Tries)
+	}
+
+	if advice, err := s.advise(context.Background(), q, nil, "adv/adv-pro:high"); err != nil || advice != "Check the tests first." {
+		t.Fatalf("translated advisor: %q, %v", advice, err)
+	}
+	u.mu.Lock()
+	chatBody := u.advisor[len(u.advisor)-1]
+	u.mu.Unlock()
+	if gjson.Get(chatBody, "max_tokens").Int() != 4096 || gjson.Get(chatBody, "reasoning_effort").String() != "high" {
+		t.Errorf("translated advisor got max_tokens=%d reasoning_effort=%q, want 4096 and high: %s",
+			gjson.Get(chatBody, "max_tokens").Int(), gjson.Get(chatBody, "reasoning_effort").String(), chatBody)
+	}
+	if rt := lastRoute(s); len(rt.Tries) != 1 || rt.Tries[0].Effort != "high" {
+		t.Errorf("translated advisor route = %+v, want Effort=high", rt.Tries)
+	}
+
+	if advice, err := s.advise(context.Background(), q, nil, "anth/claude-fable-5-2:high"); err != nil || advice != "Check the tests first." {
+		t.Fatalf("adaptive Messages advisor: %q, %v", advice, err)
+	}
+	anthMu.Lock()
+	adaptiveBody := anthBodies[len(anthBodies)-1]
+	anthMu.Unlock()
+	if gjson.Get(adaptiveBody, "max_tokens").Int() != 4096 ||
+		gjson.Get(adaptiveBody, "thinking.type").String() != "adaptive" ||
+		gjson.Get(adaptiveBody, "output_config.effort").String() != "high" {
+		t.Errorf("adaptive Messages advisor got %s", adaptiveBody)
+	}
+
+	if advice, err := s.advise(context.Background(), q, nil, "anth/claude-sonnet-4-5:high"); err != nil || advice != "Check the tests first." {
+		t.Fatalf("older Claude Messages advisor: %q, %v", advice, err)
+	}
+	anthMu.Lock()
+	olderBody := anthBodies[len(anthBodies)-1]
+	anthMu.Unlock()
+	if gjson.Get(olderBody, "max_tokens").Int() != 4096 ||
+		gjson.Get(olderBody, "thinking.type").String() != "enabled" ||
+		gjson.Get(olderBody, "thinking.budget_tokens").Int() != 4095 ||
+		gjson.Get(olderBody, "output_config").Exists() {
+		t.Fatalf("older Claude Messages advisor got %s", olderBody)
 	}
 }

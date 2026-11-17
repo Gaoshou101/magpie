@@ -58,7 +58,8 @@ func advisedHere(p provider.Provider, from, to provider.Protocol, model string, 
 			return false // Anthropic's server runs it (advisorTools)
 		}
 	}
-	_, _, ok := provider.Resolve(adv)
+	asked, _ := askedAt(adv)
+	_, _, ok := provider.Resolve(asked)
 	return ok
 }
 
@@ -93,7 +94,8 @@ func advisedInBridge(from provider.Protocol, body []byte) bool {
 	if adv == "" {
 		return false
 	}
-	_, _, ok := provider.Resolve(adv)
+	asked, _ := askedAt(adv)
+	_, _, ok := provider.Resolve(asked)
 	return ok
 }
 

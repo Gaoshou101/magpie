@@ -68,6 +68,7 @@ func TestAdvisorModelAsTheUpstreamNamesIt(t *testing.T) {
 		// Claude Code is given a dotted id with dashes, and names the
 		// advisor so (Refeccd on Discord)
 		{"a dotted id as Claude Code names it", "dot/claude-opus-5-5", "dot/claude-fable-5-2", "claude-fable-5.2", false},
+		{"a fixed effort suffix runs here", "relay/claude-sonnet-5-5", "relay/claude-opus-5-5:high", "", true},
 	} {
 		claudeCodeSends(t, advisorTurn(c.model, c.advisor))
 		b := u.last(t)

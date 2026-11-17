@@ -211,6 +211,9 @@ func TestWithFixedEffort(t *testing.T) {
 		{provider.Anthropic, `{"model":"m","max_tokens":32000}`, "none", `"thinking":{"type":"disabled"}`},
 		{provider.Anthropic, `{"model":"m","max_tokens":32000}`, "high", `"type":"enabled"`},
 		{provider.Anthropic, `{"model":"m","max_tokens":32000}`, "high", `"budget_tokens":`},
+		{provider.Anthropic, `{"model":"claude-fable-5-2","max_tokens":4096}`, "high", `"type":"adaptive"`},
+		{provider.Anthropic, `{"model":"claude-fable-5-2","max_tokens":4096}`, "high", `"output_config":{"effort":"high"}`},
+		{provider.Anthropic, `{"model":"claude-opus-4-6","max_tokens":500}`, "xhigh", `"output_config":{"effort":"max"}`},
 	} {
 		got := string(withFixedEffort(c.proto, []byte(c.in), c.effort))
 		if !strings.Contains(got, c.want) {

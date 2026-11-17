@@ -113,7 +113,7 @@ func advisorID(model string) string {
 // an advisor named model: magpie's model id when it names one, else the
 // bare id as it was sent.
 func advisorKeyModel(model string) string {
-	model = advisorID(model)
+	model, _ = askedAt(advisorID(model))
 	if _, m, ok := provider.Resolve(model); ok && !provider.IsGroupRef(model) {
 		return m
 	}
@@ -122,10 +122,15 @@ func advisorKeyModel(model string) string {
 
 // advisorModel is the name p's upstream knows the advisor model by, and
 // whether p can run it: one of p's models, by magpie's id, or a Claude
-// model's own id that names no provider.
+// model's own id that names no provider. An advisor naming a fixed effort
+// (:high) runs here (advise), as Anthropic's server tool carries no effort
+// and turns a suffixed model id away.
 func advisorModel(p provider.Provider, model string, wires map[string]string) (string, bool) {
 	model = advisorID(model)
 	if model == "" {
+		return "", false
+	}
+	if _, e := askedAt(model); e != "" {
 		return "", false
 	}
 	if q, m, ok := provider.Resolve(model); ok && !provider.IsGroupRef(model) {

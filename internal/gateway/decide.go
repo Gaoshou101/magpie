@@ -12,6 +12,7 @@ package gateway
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -852,31 +853,7 @@ func withFixedEffort(proto provider.Protocol, body []byte, effort string) []byte
 		// upstream reading the items would take over the top's
 		return withEffortUpdated(withFields(body, map[string]any{"reasoning": v.Reasoning}), effort)
 	case provider.Anthropic:
-		var v struct {
-			Thinking *struct {
-				Type string `json:"type"`
-			} `json:"thinking"`
-			MaxTokens int `json:"max_tokens"`
-		}
-		if decodeJSON(body, &v) != nil {
-			return body
-		}
-		if effort == "none" {
-			return withFields(body, map[string]any{"thinking": map[string]any{"type": "disabled"}})
-		}
-		level := effortOf(effort) // in Anthropic's words: minimal is low
-		if v.Thinking != nil && (v.Thinking.Type == "enabled" || v.Thinking.Type == "adaptive") {
-			return withEffort(proto, body, level)
-		}
-		// asked to think, with room left for the answer
-		budget := budgetOf(level)
-		if v.MaxTokens > 0 {
-			budget = min(budget, v.MaxTokens-1)
-		}
-		if budget < 1024 {
-			return body
-		}
-		return withFields(body, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": budget}})
+		return withAnthropicEffort(body, "", effort, budgetOnly)
 	case provider.Gemini:
 		var v struct {
 			Model string `json:"model"`
@@ -918,10 +895,100 @@ func agyLevelAsked(agent string, proto provider.Protocol, body []byte) bool {
 	return v.GC2 != nil && v.GC2.TC != nil && strings.TrimSpace(v.GC2.TC.Level) != ""
 }
 
-// withModelEffort is withFixedEffort for a request going to model: a
-// Gemini request's thinkingConfig is the one model takes (withGeminiEffortFor),
-// using efforts when the provider declares them before the static catalog.
+// anthropicEffortHow is how a model takes a fixed effort on an Anthropic
+// request: budgetOnly as thinking.budget_tokens alone (an older Claude or a
+// Kimi or MiniMax endpoint that turns output_config away), budgetAndLevel
+// with output_config.effort beside the budget (outputEffortAt), or
+// adaptiveLevel as thinking.type=adaptive with output_config.effort (a
+// Claude from 4.6 on, the Claude subscription bridge, or a translation off
+// Messages, none of which clamps the named level by max_tokens).
+type anthropicEffortHow int
+
+const (
+	budgetOnly anthropicEffortHow = iota
+	budgetAndLevel
+	adaptiveLevel
+)
+
+func withAnthropicEffort(body []byte, model, effort string, how anthropicEffortHow) []byte {
+	if effort == "" {
+		return body
+	}
+	var v struct {
+		Model    string `json:"model"`
+		Thinking *struct {
+			Type    string `json:"type"`
+			Display string `json:"display"`
+		} `json:"thinking"`
+		OutputConfig map[string]any `json:"output_config"`
+		MaxTokens    int            `json:"max_tokens"`
+	}
+	if decodeJSON(body, &v) != nil {
+		return body
+	}
+	if effort == "none" {
+		return withFields(body, map[string]any{"thinking": map[string]any{"type": "disabled"}})
+	}
+	m := cmp.Or(model, v.Model)
+	if adaptiveOnly(m) {
+		how = adaptiveLevel
+	}
+	level := effortOf(effort) // in Anthropic's words: minimal is low
+	if how == adaptiveLevel {
+		if level == "xhigh" && noXhigh(m) {
+			level = "max"
+		}
+		th := map[string]any{"type": "adaptive"}
+		if v.Thinking != nil && v.Thinking.Display != "" {
+			th["display"] = v.Thinking.Display
+		}
+		oc := v.OutputConfig
+		if oc == nil {
+			oc = map[string]any{}
+		}
+		oc["effort"] = level
+		return withFields(body, map[string]any{"thinking": th, "output_config": oc})
+	}
+	if how == budgetOnly && v.Thinking != nil && (v.Thinking.Type == "enabled" || v.Thinking.Type == "adaptive") {
+		return withEffort(provider.Anthropic, body, level)
+	}
+	if how == budgetAndLevel && v.Thinking != nil && v.Thinking.Type == "adaptive" {
+		oc := v.OutputConfig
+		if oc == nil {
+			oc = map[string]any{}
+		}
+		oc["effort"] = level
+		return withFields(body, map[string]any{"output_config": oc})
+	}
+	// asked to think, with room left for the answer
+	budget := budgetOf(level)
+	if v.MaxTokens > 0 {
+		budget = min(budget, v.MaxTokens-1)
+	}
+	if budget < 1024 {
+		return body
+	}
+	fields := map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": budget}}
+	if how == budgetAndLevel {
+		oc := v.OutputConfig
+		if oc == nil {
+			oc = map[string]any{}
+		}
+		oc["effort"] = level
+		fields["output_config"] = oc
+	}
+	return withFields(body, fields)
+}
+
+// withModelEffort is withFixedEffort for a request going to model: an
+// Anthropic request to a Claude from 4.6 on asks adaptively in
+// output_config.effort, and a Gemini request's thinkingConfig is the one
+// model takes (withGeminiEffortFor), using efforts when the provider
+// declares them before the static catalog.
 func withModelEffort(proto provider.Protocol, body []byte, model, effort string, efforts []string) []byte {
+	if proto == provider.Anthropic && effort != "" {
+		return withAnthropicEffort(body, model, effort, budgetOnly)
+	}
 	if proto == provider.Gemini && effort != "" {
 		return withGeminiEffortFor(body, model, effort, efforts)
 	}
