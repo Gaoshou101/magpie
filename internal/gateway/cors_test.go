@@ -851,3 +851,100 @@ func TestCORSObsidian(t *testing.T) {
 		t.Error("a keyless call from the LAN reached the vendor")
 	}
 }
+
+// A desktop or mobile WebView whose custom scheme enforces CORS (#5415:
+// MarginNote 4's WKWebView sends Origin: mnpanel://panel, another WebView app
+// sends Origin: canvas://app) gets its preflight answered and its keyed calls
+// given Access-Control-Allow-Origin once listed in Settings, while unlisted
+// custom schemes still pass without CORS headers as before.
+func TestCORSCustomSchemeOrigin(t *testing.T) {
+	fresh(t)
+	var hits atomic.Int64
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`)
+	}))
+	defer up.Close()
+	if err := provider.Save(provider.Provider{ID: "plan", Name: "Plan", Key: "upstream-secret", Chat: up.URL + "/v1", Models: []string{"m1"}}); err != nil {
+		t.Fatal(err)
+	}
+	secret, err := access.Update("add-key", access.Change{Name: "WebView"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const mn = "mnpanel://panel"
+	const canvas = "canvas://app"
+	const other = "otherapp://panel"
+	srv := lanGuard(New().Handler())
+	do := func(remoteAddr, host, method, origin, key string) *httptest.ResponseRecorder {
+		t.Helper()
+		var body io.Reader
+		if method == "POST" {
+			body = strings.NewReader(chatReq)
+		}
+		r := httptest.NewRequest(method, "/v1/chat/completions", body)
+		r.RemoteAddr = remoteAddr
+		r.Host = host
+		r.Header.Set("Origin", origin)
+		r.Header.Set("Sec-Fetch-Mode", "cors")
+		r.Header.Set("User-Agent", "Mozilla/5.0 AppleWebKit/605.1.15")
+		if method == "OPTIONS" {
+			r.Header.Set("Access-Control-Request-Method", "POST")
+			r.Header.Set("Access-Control-Request-Headers", "authorization, content-type")
+		} else {
+			r.Header.Set("Content-Type", "application/json")
+		}
+		if key != "" {
+			r.Header.Set("Authorization", "Bearer "+key)
+		}
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		return w
+	}
+
+	// unlisted: no CORS headers on preflight, and a loopback call passes without CORS headers as before
+	if w := do("127.0.0.1:50123", "127.0.0.1:3425", "OPTIONS", mn, ""); w.Code == http.StatusNoContent || w.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("unlisted WebView preflight: %d %v", w.Code, w.Header())
+	}
+	if w := do("127.0.0.1:50123", "127.0.0.1:3425", "POST", mn, ""); w.Code != http.StatusOK || w.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("unlisted WebView call: %d %v %s", w.Code, w.Header(), w.Body)
+	}
+
+	s := settings.Load()
+	s.LAN = true
+	if s.CORSOrigins, err = settings.CleanOrigins([]string{"MNPANEL://PANEL/", canvas}); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, o := range []string{mn, canvas} {
+		// loopback preflight + keyed call
+		if w := do("127.0.0.1:50123", "127.0.0.1:3425", "OPTIONS", o, ""); w.Code != http.StatusNoContent || w.Header().Get("Access-Control-Allow-Origin") != o {
+			t.Errorf("%s loopback preflight: %d %v", o, w.Code, w.Header())
+		}
+		if w := do("127.0.0.1:50123", "127.0.0.1:3425", "POST", o, secret); w.Code != http.StatusOK || w.Header().Get("Access-Control-Allow-Origin") != o || !strings.Contains(w.Body.String(), "ok") {
+			t.Errorf("%s loopback keyed call: %d %v %s", o, w.Code, w.Header(), w.Body)
+		}
+		// LAN preflight (no key on OPTIONS) + keyed call (e.g. iPad MarginNote to LAN Mac)
+		if w := do("192.168.1.50:50123", "192.168.1.10:3425", "OPTIONS", o, ""); w.Code != http.StatusNoContent || w.Header().Get("Access-Control-Allow-Origin") != o {
+			t.Errorf("%s LAN preflight: %d %v", o, w.Code, w.Header())
+		}
+		if w := do("192.168.1.50:50123", "192.168.1.10:3425", "POST", o, secret); w.Code != http.StatusOK || w.Header().Get("Access-Control-Allow-Origin") != o {
+			t.Errorf("%s LAN keyed call: %d %v %s", o, w.Code, w.Header(), w.Body)
+		}
+	}
+
+	n := hits.Load()
+	if w := do("127.0.0.1:50123", "127.0.0.1:3425", "POST", mn, ""); w.Code != http.StatusUnauthorized || w.Header().Get("Access-Control-Allow-Origin") != mn || !strings.Contains(w.Body.String(), "gateway key") {
+		t.Errorf("listed WebView without a key: %d %v %s", w.Code, w.Header(), w.Body)
+	}
+	if hits.Load() != n {
+		t.Fatal("a keyless call from a listed custom-scheme WebView reached the vendor")
+	}
+	if w := do("127.0.0.1:50123", "127.0.0.1:3425", "OPTIONS", other, ""); w.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Errorf("unlisted custom scheme preflight: %d %v", w.Code, w.Header())
+	}
+}

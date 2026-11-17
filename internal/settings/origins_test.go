@@ -68,3 +68,66 @@ func TestCleanExtensionOrigins(t *testing.T) {
 		}
 	}
 }
+
+// A desktop or mobile app's WebView that serves its UI from a custom URL
+// scheme sends scheme://host as Origin (#5415: MarginNote's WKWebView sends
+// mnpanel://panel, another WebView app canvas://app) and enforces CORS on
+// fetch. Such an origin may be listed when it names an app scheme and host
+// alone; browser built-in schemes (file, ws, wss, ftp, blob, data, about,
+// javascript), single-letter drive names, unknown *-extension schemes, paths,
+// queries, userinfo and bad ports are refused.
+func TestCleanCustomSchemeOrigins(t *testing.T) {
+	got, err := CleanOrigins([]string{
+		"mnpanel://panel",
+		" MNPANEL://Panel/ ",
+		"canvas://app",
+		"tauri://LocalHost/",
+		"capacitor://localhost",
+		"wails://wails.localhost:34115",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"mnpanel://panel",
+		"canvas://app",
+		"tauri://localhost",
+		"capacitor://localhost",
+		"wails://wails.localhost:34115",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("%v, want %v", got, want)
+	}
+	for _, bad := range []string{
+		"mnpanel://",
+		"mnpanel:///",
+		"mnpanel://*",
+		"mnpanel://*.panel",
+		"mnpanel://panel/index.html",
+		"mnpanel://panel?x=1",
+		"mnpanel://panel#top",
+		"mnpanel://u@panel",
+		"mnpanel://panel:",
+		"mnpanel://panel:0",
+		"mnpanel://panel:70000",
+		"mnpanel://panel:abc",
+		"mnpanel://..panel",
+		"file://localhost",
+		"file:///Users/a/index.html",
+		"ws://localhost:3000",
+		"wss://app.example.com",
+		"ftp://files.example.com",
+		"blob://localhost",
+		"data://text",
+		"javascript://alert",
+		"about://blank",
+		"mailto://user",
+		"view-source://localhost",
+		"c://users",
+		"edge-extension://abcdefghijklmnopabcdefghijklmnop",
+	} {
+		if o, err := CleanOrigins([]string{bad}); err == nil {
+			t.Errorf("%q taken as %v", bad, o)
+		}
+	}
+}

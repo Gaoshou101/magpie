@@ -271,10 +271,11 @@ type Settings struct {
 	// same key.
 	LAN    bool   `json:"lan,omitempty"`
 	LANKey string `json:"lanKey,omitempty"`
-	// CORSOrigins are the web pages (scheme://host[:port]) and browser
+	// CORSOrigins are the web pages (http(s)://host[:port]), browser
 	// extensions (chrome-extension://<id>, moz-extension://<uuid>,
-	// safari-web-extension://<uuid>) whose scripts may call the gateway
-	// from a browser (#1051): a preflight from one is
+	// safari-web-extension://<uuid>), and custom-scheme app WebViews
+	// (#5415, e.g. mnpanel://panel) whose scripts may call the gateway
+	// under CORS (#1051): a preflight from one is
 	// answered, and its calls carry the CORS headers that let it read the
 	// reply, each with an enabled gateway key. None by default: a page
 	// gets no CORS headers, as before.

@@ -5,18 +5,21 @@ import (
 	"net"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/yetone/magpie/internal/lazyre"
 )
 
 // CleanOrigins is the web origins a user typed for CORSOrigins, as a
-// browser's Origin header spells them: scheme://host[:port], lower-cased,
-// with no path and the scheme's default port left out. http and https are
-// origins, and so is a browser extension's page by its id (#1051,
-// SkyAerope: an extension without host permissions is held to CORS like a
-// page), as extensionIDs spells them; "*" is refused, since it would let
-// every web page or extension the user has spend their subscriptions.
+// browser's or WebView's Origin header spells them: scheme://host[:port],
+// lower-cased, with no path and an http(s) scheme's default port left out.
+// http and https are origins, so is a browser extension's page by its id
+// (#1051, SkyAerope: an extension without host permissions is held to CORS
+// like a page) as extensionIDs spells them, and so is a desktop or mobile
+// app's custom WebView scheme (#5415, PapainTea: MarginNote's WKWebView sends
+// mnpanel://panel, another WebView app canvas://app); "*" is refused, since it
+// would let every web page or extension the user has spend their subscriptions.
 func CleanOrigins(in []string) ([]string, error) {
 	var out []string
 	for _, raw := range in {
@@ -31,6 +34,10 @@ func CleanOrigins(in []string) ([]string, error) {
 	return out, nil
 }
 
+func notOriginErr(raw string) error {
+	return fmt.Errorf("%q is not an origin: write it as http://localhost:3000, https://app.example.com, chrome-extension://<its ID>, or an app's custom scheme such as mnpanel://panel", raw)
+}
+
 func cleanOrigin(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -42,13 +49,20 @@ func cleanOrigin(raw string) (string, error) {
 	if o, ok, err := extensionOrigin(raw); ok {
 		return o, err
 	}
+	if !strings.Contains(raw, "://") {
+		return "", notOriginErr(raw)
+	}
 	u, err := url.Parse(strings.TrimSuffix(raw, "/"))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+	if err != nil || u.Opaque != "" || u.Host == "" || u.User != nil ||
 		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("%q is not an origin: write it as http://localhost:3000 or https://app.example.com, or an extension's as chrome-extension://<its ID>", raw)
+		return "", notOriginErr(raw)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return customSchemeOrigin(raw, scheme, u.Host)
 	}
 	host, port := strings.ToLower(u.Hostname()), u.Port()
-	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
 		port = ""
 	}
 	if strings.Contains(host, ":") {
@@ -57,7 +71,47 @@ func cleanOrigin(raw string) (string, error) {
 	if port != "" {
 		host = net.JoinHostPort(strings.Trim(host, "[]"), port)
 	}
-	return u.Scheme + "://" + host, nil
+	return scheme + "://" + host, nil
+}
+
+var (
+	customSchemeRE = lazyre.New(`^[a-z][a-z0-9+.-]+$`)
+	customHostRE   = lazyre.New(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)
+	nonAppSchemes  = []string{
+		"about", "blob", "data", "file", "ftp", "ftps", "jar",
+		"javascript", "mailto", "tel", "urn", "vbscript", "view-source", "ws", "wss",
+	}
+)
+
+// customSchemeOrigin cleans an app WebView's custom scheme://host[:port]
+// origin (#5415, e.g. mnpanel://panel or canvas://app), refusing browser
+// built-in schemes, single-letter drive names, and unrecognised *-extension
+// schemes.
+func customSchemeOrigin(raw, scheme, rawHost string) (string, error) {
+	if !customSchemeRE.MatchString(scheme) || slices.Contains(nonAppSchemes, scheme) || strings.HasSuffix(scheme, "-extension") {
+		return "", notOriginErr(raw)
+	}
+	host := rawHost
+	port := ""
+	if strings.Contains(rawHost, ":") {
+		h, p, err := net.SplitHostPort(rawHost)
+		if err != nil || p == "" {
+			return "", notOriginErr(raw)
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != p {
+			return "", notOriginErr(raw)
+		}
+		host, port = h, p
+	}
+	host = strings.ToLower(host)
+	if !customHostRE.MatchString(host) || strings.Contains(host, "..") {
+		return "", notOriginErr(raw)
+	}
+	if port != "" {
+		return scheme + "://" + net.JoinHostPort(host, port), nil
+	}
+	return scheme + "://" + host, nil
 }
 
 // extensionIDs is the host each browser's extension origin has, as it
