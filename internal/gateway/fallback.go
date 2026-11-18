@@ -4556,18 +4556,20 @@ func policyRefusal(raw []byte) (string, bool) {
 		Code    any    `json:"code"`
 		Type    string `json:"type"`
 		Message string `json:"message"`
+		Msg     string `json:"msg"`
 		Error   *struct {
 			Code    any    `json:"code"`
 			Type    string `json:"type"`
 			Message string `json:"message"`
+			Msg     string `json:"msg"`
 		} `json:"error"`
 	}
 	if json.Unmarshal(raw, &e) != nil {
 		return "", false
 	}
-	code, typ, msg := e.Code, e.Type, e.Message
+	code, typ, msg := e.Code, e.Type, cmp.Or(e.Message, e.Msg)
 	if e.Error != nil {
-		code, typ, msg = e.Error.Code, e.Error.Type, e.Error.Message
+		code, typ, msg = e.Error.Code, e.Error.Type, cmp.Or(e.Error.Message, e.Error.Msg)
 	}
 	c, _ := code.(string)
 	if c == "" {
@@ -4597,9 +4599,17 @@ func policyRefusal(raw []byte) (string, bool) {
 		return note(c)
 	case strings.TrimSpace(msg) == highRiskRefusal:
 		return note("high risk")
+	case raccoonRefusal.MatchString(strings.TrimSpace(msg)):
+		return note("inappropriate input/output")
 	}
 	return "", false
 }
+
+// raccoonRefusal is SenseTime Raccoon's 400 error message when its content
+// filter turns the input or output away (code 100041, #7050), as the vendor or
+// its plugin returns it or after writeVendorError prepends "<Name>: ". Matched
+// whole on an error's own message so an answer quoting it stays an answer.
+var raccoonRefusal = lazyre.New(`(?i)^(?:[^"\r\n:]{1,64}:\s*)?request failed due to inappropriate input/output(?::\s*100041)?\.?$`)
 
 // highRiskRefusal is an error's whole message that is a refusal with no
 // code beside it (#2400, Jichao: what the agent showed, the vendor not

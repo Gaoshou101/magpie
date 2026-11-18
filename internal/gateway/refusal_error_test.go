@@ -300,3 +300,110 @@ func TestHighRiskErrorSplitAfterContent(t *testing.T) {
 		})
 	}
 }
+
+const raccoonRefusalMessage = "Request failed due to inappropriate input/output: 100041"
+
+func TestRaccoonRefusalMessage(t *testing.T) {
+	for _, raw := range []string{
+		`{"error":{"code":null,"message":"Raccoon: ` + raccoonRefusalMessage + `","type":"invalid_request_error"}}`,
+		`{"error":{"message":"` + raccoonRefusalMessage + `"}}`,
+		`{"error":{"code":400,"message":"Raccoon: ` + raccoonRefusalMessage + `","status":"INVALID_ARGUMENT"}}`,
+		`{"error":{"code":"100041","message":"Request failed due to inappropriate input/output"}}`,
+		`{"code":100041,"message":"Request failed due to inappropriate input/output"}`,
+		`{"code":100041,"msg":"Request failed due to inappropriate input/output"}`,
+	} {
+		if note, ok := policyRefusal([]byte(raw)); !ok || !strings.Contains(strings.ToLower(note), "inappropriate input/output") {
+			t.Errorf("not classified as a refusal: %s: %q", raw, note)
+		}
+	}
+	for _, raw := range []string{
+		`{"error":{"code":100041,"message":"rate limit exceeded"}}`,
+		`{"error":{"code":"100041","message":"invalid request parameter"}}`,
+		`{"error":{"message":"not ` + raccoonRefusalMessage + `"}}`,
+		`{"error":{"message":"` + raccoonRefusalMessage + `; please explain"}}`,
+		`{"error":{"message":"The server quoted \"` + raccoonRefusalMessage + `\""}}`,
+	} {
+		if note, ok := policyRefusal([]byte(raw)); ok {
+			t.Errorf("unrelated error classified as a refusal: %s: %q", raw, note)
+		}
+	}
+}
+
+func TestRaccoonRefusalFallsBackAcrossAccountsToNextMember(t *testing.T) {
+	errBody := `{"error":{"code":null,"message":"` + raccoonRefusalMessage + `","type":"invalid_request_error"}}`
+	for _, from := range []provider.Protocol{provider.Chat, provider.Responses, provider.Anthropic} {
+		for _, wire := range []struct {
+			name string
+			code int
+			body string
+		}{
+			{"http 400", 400, errBody},
+			{"stream error", 200, sse(`data: ` + errBody)},
+		} {
+			t.Run(string(from)+"/"+wire.name, func(t *testing.T) {
+				fresh(t)
+				ctype := "application/json"
+				if wire.code == 200 {
+					ctype = "text/event-stream"
+				}
+				r1 := &scripted{replies: []reply{{wire.code, ctype, wire.body}}}
+				r2 := &scripted{replies: []reply{{wire.code, ctype, wire.body}}}
+				rSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					if req.Header.Get("Authorization") == "Bearer k1" {
+						r1.ServeHTTP(w, req)
+						return
+					}
+					r2.ServeHTTP(w, req)
+				}))
+				defer rSrv.Close()
+				if err := provider.Save(provider.Provider{
+					ID: "raccoon", Name: "Raccoon",
+					Key:    "k1",
+					Keys:   []provider.KeyAccount{{Key: "k2"}},
+					Models: []string{"code-raccoon-v1"},
+					Chat:   rSrv.URL + "/v1",
+				}); err != nil {
+					t.Fatal(err)
+				}
+				b := &scripted{replies: []reply{{200, "text/event-stream", anthropicAnswer}}}
+				scriptedOn(t, "b", provider.Anthropic, b)
+				refusalGroup(t, "raccoon/code-raccoon-v1", "b/m")
+
+				path, ask := refusalErrorAsk(from)
+				s := New()
+				code, body := sendRefusalError(t, s, path, ask)
+				if code != 200 || !strings.Contains(body, "from b") || strings.Contains(body, raccoonRefusalMessage) || r1.n != 1 || r2.n != 1 || b.n != 1 {
+					t.Fatalf("status %d: %s (r1 %d, r2 %d, b %d)", code, body, r1.n, r2.n, b.n)
+				}
+				r := lastRoute(s)
+				if len(r.Tries) != 3 {
+					t.Fatalf("expected 3 tries (2 raccoon keys + b), got %d: %+v", len(r.Tries), r.Tries)
+				}
+				for i := 0; i < 2; i++ {
+					if r.Tries[i].Fail != failRefused || r.Tries[i].Rest != nil || !strings.Contains(r.Tries[i].Error, "inappropriate input/output") {
+						t.Fatalf("try %d was not recorded as non-resting refusal: %+v", i, r.Tries[i])
+					}
+				}
+				if rests := liveRests(); len(rests) != 0 {
+					t.Fatalf("raccoon accounts rested on safety refusal: %v", rests)
+				}
+			})
+		}
+	}
+}
+
+func TestRaccoonQuotationIsAnAnswer(t *testing.T) {
+	body := `{"id":"c1","choices":[{"message":{"role":"assistant","content":"` + raccoonRefusalMessage + `"},"finish_reason":"stop"}]}`
+	fresh(t)
+	a := &scripted{replies: []reply{{200, "application/json", body}}}
+	b := &scripted{replies: []reply{{200, "", chatOK}}}
+	scriptedOn(t, "a", provider.Chat, a)
+	scriptedOn(t, "b", provider.Chat, b)
+	refusalGroup(t, "a/m", "b/m")
+	s := New()
+	path, ask := refusalErrorAsk(provider.Chat)
+	code, got := sendRefusalError(t, s, path, ask)
+	if code != 200 || strings.TrimSpace(got) != strings.TrimSpace(body) || a.n != 1 || b.n != 0 {
+		t.Fatalf("quoted raccoon message was treated as a refusal: %d %s (a %d, b %d)", code, got, a.n, b.n)
+	}
+}
