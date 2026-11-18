@@ -291,3 +291,78 @@ func TestDsBotOwnModels(t *testing.T) {
 		t.Fatal("the round put pro back in DS Bot's route")
 	}
 }
+
+// internal/library's sandbox clears APPDATA (#6995), where Go's
+// os.UserConfigDir fails on Windows ("%AppData% is not defined") as it does
+// on Unix with a relative XDG_CONFIG_HOME: dsbotHome falls back to the home
+// folder's default config path instead of leaving ds-bot with no Dir.
+func TestDsBotWindowsNoAppData(t *testing.T) {
+	home, _, _, _ := dsbotSandbox(t)
+	t.Setenv("DS_BOT_SHELL_DATA", "")
+	t.Setenv("APPDATA", "")
+	t.Setenv("XDG_CONFIG_HOME", "relative-xdg")
+	want := filepath.Join(home, ".ds-bot")
+	if dir, ok := dsbotHome(); !ok || dir != want {
+		t.Fatalf("dsbotHome without UserConfigDir env = %q, %v; want %q, true", dir, ok, want)
+	}
+	if dir, ok := dsbotHomeOn("windows"); !ok || dir != want {
+		t.Fatalf("dsbotHomeOn(windows) with APPDATA empty = %q, %v; want %q, true", dir, ok, want)
+	}
+
+	roaming := filepath.Join(home, "AppData", "Roaming")
+	legacy := filepath.Join(roaming, "DeepSeek Bot")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldDir := filepath.Join(home, "old-win-bot")
+	if err := os.WriteFile(filepath.Join(legacy, "locations.json"), []byte(`{"dataDir":"`+filepath.ToSlash(oldDir)+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if dir, ok := dsbotHomeOn("windows"); !ok || filepath.Clean(dir) != oldDir {
+		t.Fatalf("dsbotHomeOn(windows) legacy Roaming = %q, %v; want %q, true", dir, ok, oldDir)
+	}
+
+	cur := filepath.Join(roaming, "DS Bot")
+	if err := os.MkdirAll(cur, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	picked := filepath.Join(home, "Documents", "win-bot")
+	loc := filepath.Join(cur, "locations.json")
+	if err := os.WriteFile(loc, []byte(`{"dataDir":"`+filepath.ToSlash(picked)+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if dir, ok := dsbotHomeOn("windows"); !ok || filepath.Clean(dir) != picked {
+		t.Fatalf("dsbotHomeOn(windows) DS Bot Roaming = %q, %v; want %q, true", dir, ok, picked)
+	}
+
+	// An explicit APPDATA overrides the home\AppData\Roaming fallback.
+	altApp := filepath.Join(t.TempDir(), "CustomRoaming")
+	altPicked := filepath.Join(home, "alt-win-bot")
+	if err := os.MkdirAll(filepath.Join(altApp, "DS Bot"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(altApp, "DS Bot", "locations.json"), []byte(`{"dataDir":"`+filepath.ToSlash(altPicked)+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("APPDATA", altApp)
+	if dir, ok := dsbotHomeOn("windows"); !ok || filepath.Clean(dir) != altPicked {
+		t.Fatalf("dsbotHomeOn(windows) explicit APPDATA = %q, %v; want %q, true", dir, ok, altPicked)
+	}
+	t.Setenv("APPDATA", "")
+
+	// A broken locations.json under the fallback Roaming folder still marks
+	// the folder unknown rather than silently writing to ~/.ds-bot.
+	if err := os.WriteFile(loc, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if dir, ok := dsbotHomeOn("windows"); ok {
+		t.Fatalf("broken locations.json on Windows taken for %q", dir)
+	}
+
+	// With neither APPDATA nor a usable home folder, nothing is guessed.
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	if dir, ok := dsbotHomeOn("windows"); ok {
+		t.Fatalf("no home and no APPDATA taken for %q", dir)
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/yetone/magpie/internal/appdir"
@@ -47,13 +48,18 @@ func dsbotFile(dir string) string {
 // can't be read or names no folder is unknown: never taken for the default,
 // where magpie would wire a folder the app doesn't run on.
 func dsbotHome() (string, bool) {
+	return dsbotHomeOn(runtime.GOOS)
+}
+
+func dsbotHomeOn(goos string) (string, bool) {
 	if dir := appdir.Getenv("DS_BOT_HOME"); dir != "" {
 		return dir, true
 	}
+	home, _ := os.UserHomeDir()
 	userData := appdir.Getenv("DS_BOT_SHELL_DATA")
 	if userData == "" {
-		cfg, err := os.UserConfigDir()
-		if err != nil {
+		cfg := dsbotConfigDir(goos, home)
+		if cfg == "" {
 			return "", false
 		}
 		userData = filepath.Join(cfg, "DS Bot")
@@ -63,8 +69,7 @@ func dsbotHome() (string, bool) {
 	}
 	b, err := os.ReadFile(filepath.Join(userData, "locations.json"))
 	if errors.Is(err, os.ErrNotExist) {
-		home, err := os.UserHomeDir()
-		if err != nil {
+		if home == "" {
 			return "", false
 		}
 		return filepath.Join(home, ".ds-bot"), true
@@ -79,6 +84,36 @@ func dsbotHome() (string, bool) {
 		return "", false
 	}
 	return places.DataDir, true
+}
+
+// dsbotConfigDir is Electron's appData folder on goos, with home as the
+// user's home folder: ~/Library/Application Support on a Mac, %APPDATA%
+// (or home\AppData\Roaming when APPDATA is unset, as a test sandbox clears
+// it: #6995) on Windows, and $XDG_CONFIG_HOME (or ~/.config) elsewhere.
+func dsbotConfigDir(goos, home string) string {
+	switch goos {
+	case "darwin":
+		if home == "" {
+			return ""
+		}
+		return filepath.Join(home, "Library", "Application Support")
+	case "windows":
+		if cfg := appdir.Getenv("APPDATA"); cfg != "" {
+			return cfg
+		}
+		if home == "" {
+			return ""
+		}
+		return filepath.Join(home, "AppData", "Roaming")
+	default:
+		if cfg := appdir.Getenv("XDG_CONFIG_HOME"); cfg != "" {
+			return cfg
+		}
+		if home == "" {
+			return ""
+		}
+		return filepath.Join(home, ".config")
+	}
 }
 
 // dsbotDataDir is dsbotHome, "" when it is unknown, with the folder noted
