@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -172,5 +173,64 @@ func TestSearchingFromAnotherMagpie(t *testing.T) {
 		if seen != c.want {
 			t.Errorf("%s: searching = %v", c.ua, seen)
 		}
+	}
+}
+
+// A remote magpie shrinking its live model list while AutoSearcher or
+// remoteSearch reads it must not index the shorter list at the previous
+// list's offset (#7045).
+func TestRemoteSearchShrinkingListDoesNotPanic(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	setHome(t, t.TempDir())
+	id, err := provider.Add(provider.Provider{
+		ID:     "devbox",
+		Name:   "Devbox",
+		Preset: provider.RemoteMagpiePreset,
+		Chat:   "127.0.0.1:19999",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devbox, err := provider.Find(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	longList := make([]catalog.Model, 32)
+	for i := range longList {
+		longList[i] = catalog.Model{ID: fmt.Sprintf("m-%02d", i), WebSearch: searchNative}
+	}
+	shortList := longList[:5]
+	if err := catalog.SaveLive(id, devbox.Chat, longList); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if i%2 == 0 {
+				_ = catalog.SaveLive(id, devbox.Chat, shortList)
+			} else {
+				_ = catalog.SaveLive(id, devbox.Chat, longList)
+			}
+		}
+	}()
+
+	defer func() {
+		close(done)
+		wg.Wait()
+	}()
+
+	for i := 0; i < 150; i++ {
+		_ = remoteSearch(*devbox, "m-28")
+		_ = AutoSearcher()
 	}
 }

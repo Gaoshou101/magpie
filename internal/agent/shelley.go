@@ -247,11 +247,12 @@ func shelleyYes(b bool) string {
 
 // shelleyReasons: magpie's model ref reasons, as far as magpie knows.
 func shelleyReasons(ref string) bool {
-	i := slices.IndexFunc(sharedModels("shelley"), func(m catalog.Model) bool { return m.ID == ref })
+	ms := sharedModels("shelley")
+	i := slices.IndexFunc(ms, func(m catalog.Model) bool { return m.ID == ref })
 	if i < 0 {
 		return true // not known: Shelley's own "auto" decides
 	}
-	m := sharedModels("shelley")[i]
+	m := ms[i]
 	return m.Reasoning || len(m.Efforts) > 0
 }
 

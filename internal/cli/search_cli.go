@@ -138,8 +138,11 @@ func searchCmd(args []string) error {
 				return fmt.Errorf("magpie search add <api> <key> [url=<address>] [pick=turns|order]")
 			}
 		}
-		if i := slices.IndexFunc(provider.StoredSearchAPIs(), func(x provider.SearchAPI) bool { return x.Vendor == a.Vendor }); i >= 0 && !urlGiven {
-			a.URL = provider.StoredSearchAPIs()[i].URL
+		if !urlGiven {
+			as := provider.StoredSearchAPIs()
+			if i := slices.IndexFunc(as, func(x provider.SearchAPI) bool { return x.Vendor == a.Vendor }); i >= 0 {
+				a.URL = as[i].URL
+			}
 		}
 		if err := provider.SetSearchAPI(a); err != nil {
 			return err

@@ -251,8 +251,9 @@ func pluginSearches(p provider.Provider, model string) bool {
 	if !p.IsPlugin() {
 		return false
 	}
-	i := slices.IndexFunc(p.Available(), func(m catalog.Model) bool { return m.ID == model })
-	return i >= 0 && p.Available()[i].WebSearch == searchNative
+	ms := p.Available()
+	i := slices.IndexFunc(ms, func(m catalog.Model) bool { return m.ID == model })
+	return i >= 0 && ms[i].WebSearch == searchNative
 }
 
 // searchesAlone is whether model of p searches by itself where the rest
@@ -443,11 +444,12 @@ func namedSearcher(v string) (*provider.Provider, string, string) {
 		return nil, "", ""
 	}
 	id, model, _ := strings.Cut(v, "/")
-	i := slices.IndexFunc(provider.All(), func(p provider.Provider) bool { return p.ID == id })
+	all := provider.All()
+	i := slices.IndexFunc(all, func(p provider.Provider) bool { return p.ID == id })
 	if i < 0 {
 		return nil, "", SearcherGone
 	}
-	p := provider.All()[i]
+	p := all[i]
 	r, _ := namedSearcherRank(p)
 	switch {
 	case !p.On():

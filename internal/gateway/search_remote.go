@@ -38,8 +38,9 @@ func remoteSearch(p provider.Provider, model string) string {
 	if !p.IsRemoteMagpie() {
 		return ""
 	}
-	if i := slices.IndexFunc(p.Available(), func(m catalog.Model) bool { return m.ID == model }); i >= 0 {
-		return p.Available()[i].WebSearch
+	ms := p.Available()
+	if i := slices.IndexFunc(ms, func(m catalog.Model) bool { return m.ID == model }); i >= 0 {
+		return ms[i].WebSearch
 	}
 	return ""
 }
