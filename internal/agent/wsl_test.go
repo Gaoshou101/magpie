@@ -431,3 +431,88 @@ func TestWSLStoppedSinceNotOpened(t *testing.T) {
 		t.Fatal("written into the stopped distro")
 	}
 }
+
+// A running WSL distro's Codex reads its own models_cache.json for its model,
+// subagent, memories and effort pickers rather than the Windows host's, while
+// a stopped distro's asleep options keep reading the host's without touching
+// the distro's files (#7003).
+func TestWSLCodexReadsDistroModelsCache(t *testing.T) {
+	winHome, _ := codexHome(t, `{"tokens":{"access_token":"x","id_token":"x.e30.x"}}`, "model = \"gpt-6.1-sol\"\n")
+	if err := os.WriteFile(filepath.Join(winHome, ".codex", "models_cache.json"), []byte(`{"models":[
+		{"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol","priority":1,"supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}]}
+	]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wslHome := t.TempDir()
+	wslDir := filepath.Join(wslHome, ".codex")
+	if err := os.MkdirAll(wslDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wslDir, "config.toml"), []byte("model = \"gpt-6.2-astra\"\n[agents]\ndefault_subagent_model = \"gpt-6.2-astra\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wslDir, "models_cache.json"), []byte(`{"models":[
+		{"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol","priority":1,"supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}]},
+		{"slug":"gpt-6.2-astra","display_name":"GPT-6.2 Astra","priority":2,"supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"}]}
+	]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	groupValues := func(opts []Option, g string) []string {
+		var out []string
+		for _, o := range opts {
+			if o.Group == g {
+				out = append(out, o.Value)
+			}
+		}
+		return out
+	}
+	optValues := func(opts []Option) []string {
+		var out []string
+		for _, o := range opts {
+			if o.Value != "" {
+				out = append(out, o.Value)
+			}
+		}
+		return out
+	}
+
+	if got := groupValues(codex(winHome).Field("model").Options(nil), "OpenAI"); !reflect.DeepEqual(got, []string{"gpt-6.1-sol"}) {
+		t.Fatalf("Windows host OpenAI models: %v, want [gpt-6.1-sol]", got)
+	}
+
+	a := wslCodex(fakeDistro(wslHome, true))
+	want := []string{"gpt-6.1-sol", "gpt-6.2-astra"}
+	for _, key := range []string{"model", "subagent", "memories"} {
+		if got := groupValues(a.Field(key).Options(nil), "OpenAI"); !reflect.DeepEqual(got, want) {
+			t.Fatalf("WSL %s OpenAI models: %v, want %v", key, got, want)
+		}
+	}
+	wantEfforts := []string{"low", "medium", "high", "xhigh"}
+	if got := optValues(a.Field("effort").Options(map[string]string{"model": "gpt-6.2-astra"})); !reflect.DeepEqual(got, wantEfforts) {
+		t.Fatalf("WSL effort options for gpt-6.2-astra: %v, want %v", got, wantEfforts)
+	}
+	if got := optValues(a.Field("subagent_effort").Options(nil)); !reflect.DeepEqual(got, wantEfforts) {
+		t.Fatalf("WSL subagent_effort options for gpt-6.2-astra: %v, want %v", got, wantEfforts)
+	}
+
+	// Custom non-OpenAI provider branch in modelOptions also reads the distro cache.
+	if err := os.WriteFile(filepath.Join(wslDir, "config.toml"), []byte("model = \"gpt-6.2-astra\"\nmodel_provider = \"relay\"\n[model_providers.relay]\nname = \"relay\"\nbase_url = \"https://relay.example/v1\"\nwire_api = \"responses\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := groupValues(a.Field("model").Options(nil), "relay"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("WSL custom provider models: %v, want %v", got, want)
+	}
+
+	// A stopped distro keeps using the host cache via asleep without touching its folder.
+	stoppedRoot := filepath.Join(t.TempDir(), "stopped")
+	stopped := distro{Name: "Debian", Root: stoppedRoot, Home: "/home/me", Has: map[string]bool{"dir:.codex": true}, Running: false}
+	sa := wslCodex(stopped)
+	if got := groupValues(sa.Field("model").Options(nil), "OpenAI"); !reflect.DeepEqual(got, []string{"gpt-6.1-sol"}) {
+		t.Fatalf("stopped WSL OpenAI models: %v, want [gpt-6.1-sol]", got)
+	}
+	if _, err := os.Stat(stoppedRoot); err == nil {
+		t.Fatal("stopped distro folder was created or touched")
+	}
+}

@@ -548,10 +548,10 @@ func codexIn(at place) *Agent {
 		case asProvider():
 			return sharedModels("codex")
 		case viaBase():
-			own, more := catalog.CodexShared(), sharedModels("codex")
+			own, more := catalog.CodexSharedIn(dir), sharedModels("codex")
 			return append(append(make([]catalog.Model, 0, len(own)+len(more)), own...), more...)
 		}
-		return catalog.CodexShared()
+		return catalog.CodexSharedIn(dir)
 	}
 	// relist hands Codex its models again after the effort new sessions
 	// start at changed, which their default efforts follow: magpie's
@@ -1655,9 +1655,9 @@ func codexIn(at place) *Agent {
 			return own
 		}
 		if p != "" && p != magpieID && !isCCSwitchMirror(p) {
-			own = say(group(p, codexNamed(catalog.Codex())))
+			own = say(group(p, codexNamed(catalog.CodexSharedIn(dir))))
 		} else {
-			own = codexInMagpie(say(group("OpenAI", codexNamed(ownCodex()))))
+			own = codexInMagpie(say(group("OpenAI", codexNamed(ownCodexIn(dir)))))
 			// with magpie Codex's provider (magpie API, or a magpie model
 			// picked with no ChatGPT sign-in beside it), Codex's own models
 			// are reached through magpie on a ChatGPT account there: picked
@@ -2729,8 +2729,10 @@ func codexEnableEfforts(path string, ms []catalog.Model) error {
 // ownCodex is Codex's own models, narrowed to the ones ticked on its ChatGPT
 // subscription in magpie when any are — the subscription switched off, its
 // picks narrow nothing, as it serves no agent anything.
-func ownCodex() []catalog.Model {
-	ms := catalog.CodexShared() // only read (codexNamed), on every poll
+func ownCodex() []catalog.Model { return ownCodexIn(catalog.CodexHome()) }
+
+func ownCodexIn(dir string) []catalog.Model {
+	ms := catalog.CodexSharedIn(dir) // only read (codexNamed), on every poll
 	picks := codexPicks()
 	if len(picks) == 0 {
 		return ms
