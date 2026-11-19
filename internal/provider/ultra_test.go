@@ -25,7 +25,7 @@ func TestUltraOnModelsThatOfferIt(t *testing.T) {
 
 	for id, want := range map[string]bool{
 		"gpt-6.1-sol": true, "openai/gpt-6.1-sol": true, "GPT-6.1-Sol": true, "gpt-6.1-sol-2026-09-14": true,
-		"gpt-6-astra": true, "gpt-6-sol": true, "gpt-5.6-sol": true, "gpt-5.6-terra": true,
+		"gpt-6-astra": true, "gpt-6-sol": true, "gpt-6.2-sol": true, "relay/gpt-6.2-sol": true, "gpt-6.2-sol-2026-11-04": true, "gpt-5.6-sol": true, "gpt-5.6-terra": true,
 		"gpt-6.1-terra": true, "relay/gpt-6.1-terra": true,
 		"gpt-6-luna": false, "gpt-5.6-luna": false, "gpt-6.1-sol-mini": false, "claude-opus-5-5": false, "": false,
 	} {
@@ -46,6 +46,14 @@ func TestUltraOnModelsThatOfferIt(t *testing.T) {
 	terra := entryFor(copilot, catalog.Model{ID: "gpt-6.1-terra", Efforts: upToMax}, s)
 	if !slices.Equal(terra.Efforts, append(slices.Clone(upToMax), "ultra")) || !terra.AgentsV2 {
 		t.Fatalf("copilot/gpt-6.1-terra: %v v2=%v", terra.Efforts, terra.AgentsV2)
+	}
+	// gpt-6.2-sol carries Ultra and multi-agent V2 in Codex 0.170.0's
+	// catalog (#7110): a third-party provider's catalog leaves its levels
+	// unspecified, magpie resolves them up to max, and the entry lists it
+	// too — the menu stopped at Max before
+	sol2 := entryFor(copilot, catalog.Model{ID: "gpt-6.2-sol", Efforts: upToMax}, s)
+	if !slices.Equal(sol2.Efforts, append(slices.Clone(upToMax), "ultra")) || !sol2.AgentsV2 {
+		t.Fatalf("copilot/gpt-6.2-sol: %v v2=%v", sol2.Efforts, sol2.AgentsV2)
 	}
 	luna := entryFor(copilot, catalog.Model{ID: "gpt-6-luna", Efforts: upToMax}, s)
 	if !slices.Equal(luna.Efforts, upToMax) || luna.AgentsV2 {

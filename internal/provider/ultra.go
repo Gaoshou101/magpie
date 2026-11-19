@@ -17,7 +17,7 @@ import (
 // magpie offers it on them wherever they are served (Copilot's, a key's, a
 // relay's: #656), never on every model that reaches max. GPT-6.1 Terra
 // carries it since #4909.
-var ultraModels = []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.1-terra"}
+var ultraModels = []string{"gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.1-terra"}
 
 // ultraSet is ultraModels as catalog.IsOneOf takes them.
 var ultraSet = func() map[string]bool {
