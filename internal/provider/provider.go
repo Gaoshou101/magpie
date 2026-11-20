@@ -1181,6 +1181,11 @@ func accountSettings(a, pk Provider) Provider {
 	a.ReplyHeaders = pk.ReplyHeaders
 	// and the headers of the agent's requests passed on
 	a.PassHeaders = pk.PassHeaders
+	// and whether sync keeps it on this computer (#7229): a subscription
+	// signed in on one computer among several that sync lost the flag on
+	// every Save, and the next sync wrote the other computer's copy back,
+	// turning the agent off there — as `this-device` never told the user.
+	a.ThisDevice = pk.ThisDevice
 	return a
 }
 
