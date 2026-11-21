@@ -133,3 +133,34 @@ func TestRequestStateKeptAcrossACatalogChangeNoRowAsks(t *testing.T) {
 		t.Fatal("a check before the catalog was read again kept the index past it")
 	}
 }
+
+// Same-size catalog replacement within one filesystem mtime tick must still
+// move usagePriceCacheKey (reproduces the WSL2/coarse-clock failure of
+// TestRequestStateKeptAcrossACatalogFetchedAgain deterministically, #6572).
+func TestUsagePriceCacheKeySeesSameSizeSameTickCatalogWrite(t *testing.T) {
+	pageHome(t)
+	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
+	p := catalog.CachePath()
+	write := func(b string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(b), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"openai":{"id":"openai","models":{"gpt-6.1-sol":{"id":"gpt-6.1-sol","cost":{"input":2,"output":10}}}}}`)
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	price := usagePriceCacheKey(now)
+	write(`{"openai":{"id":"openai","models":{"gpt-6.1-sol":{"id":"gpt-6.1-sol","cost":{"input":3,"output":10}}}}}`)
+	if err := os.Chtimes(p, st.ModTime(), st.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if usagePriceCacheKey(now) == price {
+		t.Fatal("a same-size catalog write in the same mtime tick kept the price key")
+	}
+}

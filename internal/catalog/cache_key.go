@@ -19,8 +19,13 @@ import (
 // session file again, ~15 s of CPU over a long history.
 func CacheKey() string { return fileKey(CachePath()) + "|" + fileKey(LabsPath()) }
 
+// fileKeySettled is how old a file's mtime must be for any later write to
+// stamp a later one, many ticks of the coarsest clock (matching
+// filememo.settled and provider.codexListSettled).
+const fileKeySettled = 2 * time.Second
+
 // fileKeys holds each file's last key by the stat it was hashed at, so a
-// key costs a stat until the file changes.
+// key costs a stat once the file's mtime has settled.
 var fileKeys = struct {
 	sync.Mutex
 	m map[string]keyedFile
@@ -36,30 +41,58 @@ type keyedFile struct {
 // its stat when it can't be read: an unknown read is a change each time
 // the file is written, as it was before.
 func fileKey(path string) string {
+	now := time.Now()
 	st, err := os.Stat(path)
 	if err != nil {
+		fileKeys.Lock()
+		delete(fileKeys.m, path)
+		fileKeys.Unlock()
 		return "missing"
 	}
-	fileKeys.Lock()
-	k, ok := fileKeys.m[path]
-	fileKeys.Unlock()
-	if ok && k.size == st.Size() && k.mod.Equal(st.ModTime()) {
-		return k.key
+	if now.Sub(st.ModTime()) >= fileKeySettled {
+		fileKeys.Lock()
+		k, ok := fileKeys.m[path]
+		fileKeys.Unlock()
+		if ok && k.size == st.Size() && k.mod.Equal(st.ModTime()) {
+			return k.key
+		}
 	}
 	// hashed as it is read: the catalog is ~6 MB, and holding it whole
 	// for its sum added that much to the start's peak
 	h := sha256.New()
 	f, err := os.Open(path)
+	var settled bool
 	if err == nil {
-		_, err = io.Copy(h, f)
+		var fst, after os.FileInfo
+		fst, err = f.Stat()
+		if err == nil {
+			st = fst
+			_, err = io.Copy(h, f)
+		}
+		if err == nil {
+			after, err = f.Stat()
+			if err == nil {
+				st = after
+				settled = fst.Size() == after.Size() &&
+					fst.ModTime().Equal(after.ModTime()) &&
+					now.Sub(after.ModTime()) >= fileKeySettled
+			}
+		}
 		f.Close()
 	}
 	if err != nil {
+		fileKeys.Lock()
+		delete(fileKeys.m, path)
+		fileKeys.Unlock()
 		return fmt.Sprintf("stat:%d:%d", st.Size(), st.ModTime().UnixNano())
 	}
 	key := hex.EncodeToString(h.Sum(nil))
 	fileKeys.Lock()
-	fileKeys.m[path] = keyedFile{size: st.Size(), mod: st.ModTime(), key: key}
+	if settled {
+		fileKeys.m[path] = keyedFile{size: st.Size(), mod: st.ModTime(), key: key}
+	} else {
+		delete(fileKeys.m, path)
+	}
 	fileKeys.Unlock()
 	return key
 }
