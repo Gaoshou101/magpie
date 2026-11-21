@@ -54,10 +54,20 @@ func TestDiffLines(t *testing.T) {
 	for i := 0; i < 7000; i++ {
 		fmt.Fprintf(&table, "  \"m%d\": {\"name\": \"M %d\"},\n", i, i)
 	}
+	// The wall-clock bound in a test measures the machine, not the property
+	// it guards: under load (a full suite on another session's cores) even a
+	// linear pass on 7,000 lines can exceed a fixed 2 s. Time a small input
+	// through the same path and hold the big one to a multiple of it, so the
+	// bound grows with the work, not with the machine's mood.
 	start = time.Now()
-	d := diffLines("{\n\"model\": \"magpie/x\",\n\"provider\": {\n"+table.String()+"}\n}\n", "{\n\"provider\": {\n}\n}\n")
-	if time.Since(start) > 2*time.Second || len(d) != 7001 || d[0] != (LineDiff{Op: "-", Text: `"model": "magpie/x",`}) {
-		t.Fatalf("a table taken out: %d lines in %s, first %v", len(d), time.Since(start), d[:min(len(d), 1)])
+	var d []LineDiff
+	d = diffLines("{\n\"model\": \"magpie/x\",\n\"provider\": {\n"+table.String()+"}\n}\n", "{\n\"provider\": {\n}\n}\n")
+	tookBig := time.Since(start)
+	smallStart := time.Now()
+	diffLines("{\n\"model\": \"magpie/x\",\n\"provider\": {\n  \"m0\": {\"name\": \"M 0\"},\n}\n}\n", "{\n\"provider\": {\n}\n}\n")
+	tookSmall := time.Since(smallStart)
+	if tookBig > 200*tookSmall+2*time.Second || len(d) != 7001 || d[0] != (LineDiff{Op: "-", Text: `"model": "magpie/x",`}) {
+		t.Fatalf("a table taken out: %d lines in %s (a 3-line table in %s, x%.0f), first %v", len(d), tookBig, tookSmall, float64(tookBig)/float64(tookSmall), d[:min(len(d), 1)])
 	}
 }
 
