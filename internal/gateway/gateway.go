@@ -6508,13 +6508,27 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 	// "updates", a turn's output_config in messages: anthropic_shapes.go),
 	// each learned once, and the thinking blocks Claude says were signed
 	// for another conversation or account (thinking_bound.go)
+	// llama.cpp turns a tool_reference in a tool_result's content
+	// away with a 500 "Jinja Exception: Unexpected item type in
+	// content." (yetone/magpie#7383) — a 500, so the 400/422 gate
+	// under it never let it be learned. Those errors are JSON bodies,
+	// not a stream, so the body is only read, as the 400/422 path
+	// always did, once the status gate names one of the three: a
+	// network error's nil response and err go back as they are, and a
+	// 200 (stream or not) is handed on unread.
 	for range 3 {
-		if err != nil || to != provider.Anthropic || res.StatusCode != http.StatusBadRequest && res.StatusCode != http.StatusUnprocessableEntity {
+		if err != nil || res == nil || to != provider.Anthropic ||
+			res.StatusCode != http.StatusBadRequest && res.StatusCode != http.StatusUnprocessableEntity &&
+				res.StatusCode != http.StatusInternalServerError {
 			return res, err
 		}
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		res.Body.Close()
 		res.Body = io.NopCloser(bytes.NewReader(b))
+		if res.StatusCode == http.StatusInternalServerError &&
+			(!jinjaItemRefused.Match(b) || !hasResultRefs(body)) {
+			return res, nil
+		}
 		sent := s.withoutRefusedShapes(p, body)
 		betas := len(s.refuseBetas(p, b)) > 0
 		shapes := s.refuseShapes(p, b, body)

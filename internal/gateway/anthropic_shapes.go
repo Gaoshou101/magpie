@@ -110,6 +110,10 @@ var (
 	// tool_definition)
 	refsNamed    = lazyre.New(`(?i)\b(?:got|unknown|unsupported|not supported|invalid|unexpected|not allowed|not permitted|does ?n[o']t support|cannot|can't)\b[^\n{}]{0,40}\btool_reference\b|\btool_reference\b[^\n{}]{0,40}\b(?:not supported|unsupported|not allowed|not permitted|invalid)`)
 	refsExpected = lazyre.New("(?i)expected [`'\"\\\\]*tool_reference\\b")
+	// llama.cpp's Jinja Exception, as its Qwen template (text, image and
+	// video only) turns a tool_reference in a tool_result's content away
+	// with a 500, not a 400 — nothing else learns from it (yetone/magpie#7383).
+	jinjaItemRefused = lazyre.New("(?i)Jinja Exception: Unexpected item type in content")
 )
 
 // knownDisplay is a thinking.display every Anthropic endpoint has taken.
@@ -145,10 +149,12 @@ func (s *Server) refuseShapes(p provider.Provider, errBody, body []byte) bool {
 	if refsOnlyRefused.Match(errBody) && hasRefsOnlyResult(body) {
 		mark(shapeRefsOnly)
 	}
-	if refsRefused(errBody) {
+	if refsRefused(errBody) || jinjaItemRefused.Match(errBody) {
 		// the references in a tool_result themselves; one a deferred
 		// block's refusal names, while such blocks are still sent, is
-		// that refusal's
+		// that refusal's. llama.cpp's Jinja Exception says "item type",
+		// naming no tool_reference, so it is learned here against the
+		// request's own references (yetone/magpie#7383)
 		sent := s.withoutRefusedShapes(p, body)
 		if deferredOutUpFront(p, provider.Anthropic, sent) {
 			sent = withoutDeferredTools(sent)
