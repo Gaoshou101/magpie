@@ -3555,6 +3555,7 @@ magpie.plugin("library", (ctx) => {
     const who = el("div", "who");
     const nm = el("div", "name mono", s.name);
     if (s.signIn?.dead) nm.append(tag(t("Sign-in ran out"), "warn", t("Open it to sign in again")));
+    else if (s.signIn?.retryAt > Date.now()) nm.append(tag(t("Renewal rate-limited"), "warn", t("The server rate-limited token renewal — magpie will try again after the cooldown")));
     else if (s.signIn?.signedIn) nm.append(tag(t("Signed in"), "lib-signed", t("The agents given it use magpie's sign-in")));
     // kept to this computer: sync carries it nowhere (huhuy72219405 on X)
     // a plugin's tools say whose they are, where they are turned off too
@@ -3882,7 +3883,7 @@ magpie.plugin("library", (ctx) => {
       // a renewed token): the row's tag says so, not "Signed in" beside
       // "needs sign-in" (新v学员 on Discord)
       const s = lib.servers.find((x) => x.name === name);
-      if (h?.signIn && s && (!!h.signIn.signedIn !== !!s.signIn?.signedIn || !!h.signIn.dead !== !!s.signIn?.dead)) {
+      if (h?.signIn && s && (!!h.signIn.signedIn !== !!s.signIn?.signedIn || !!h.signIn.dead !== !!s.signIn?.dead || (h.signIn.retryAt || 0) !== (s.signIn?.retryAt || 0))) {
         s.signIn = h.signIn;
         health.set(name, { key: healthKey(s), h });
         signIns = true;
@@ -3939,6 +3940,7 @@ magpie.plugin("library", (ctx) => {
       case "novar": return [t("{names} not set", { names: h.detail }), t("magpie can't check it: {names} isn't set where magpie runs. An agent started where it is set still gets it", { names: h.detail })];
       // the agents given it run in a WSL distro that isn't running, which
       // a check doesn't start: nothing is known of the server
+      case "ratelimited": return [t("renewal rate-limited"), more(t("The server rate-limited token renewal — magpie will try again after the cooldown"))];
       case "wsldown": return [t("WSL {distro} not running", { distro: h.detail }), t("magpie can't check it: the agents given it run in WSL {distro}, which isn't running, and a check doesn't start it", { distro: h.detail })];
       default: return [t("couldn't check"), more(t("magpie couldn't check it"))];
     }
@@ -3990,7 +3992,7 @@ magpie.plugin("library", (ctx) => {
       // agent's own launch sets says nothing of the server, so it isn't
       // painted as broken (#2308, ASD-max: Codex's host-only codex_app,
       // whose pipe Codex itself hands it)
-      b.className = "lib-health " + (e.h.state === "ok" || e.h.agentSignIn?.length ? "ok" : e.h.state === "auth" ? "auth" : e.h.why === "novar" || e.h.why === "wsldown" ? "unknown" : "err");
+      b.className = "lib-health " + (e.h.state === "ok" || e.h.agentSignIn?.length ? "ok" : e.h.state === "auth" || e.h.why === "ratelimited" ? "auth" : e.h.why === "novar" || e.h.why === "wsldown" ? "unknown" : "err");
       b.replaceChildren(el("span", "", text));
       if (toolList(b.dataset.server).length) {
         const open = toolsOpen.has(b.dataset.server);
@@ -4084,7 +4086,8 @@ magpie.plugin("library", (ctx) => {
         box.append(acctList(cur.accounts.map((a) => ({ id: a.id, name: a.label || t("Account {n}", { n: cur.accounts.indexOf(a) + 1 }), on: a.active, bad: a.dead })), "signin", name, draw));
         line.append(addSign(), el("span", "grow"), button(t("Sign out"), "", signOut));
       } else if (cur.signedIn && !cur.dead) {
-        line.append(tag(t("Signed in"), "lib-signed"), el("span", "note", t("The agents given it use magpie's sign-in")), el("span", "grow"), name ? addSign() : "", button(t("Sign out"), "", signOut));
+        const limited = cur.retryAt > Date.now();
+        line.append(limited ? tag(t("Renewal rate-limited"), "warn") : tag(t("Signed in"), "lib-signed"), el("span", "note", limited ? t("The server rate-limited token renewal — magpie will try again after the cooldown") : t("The agents given it use magpie's sign-in")), el("span", "grow"), name ? addSign() : "", button(t("Sign out"), "", signOut));
       } else {
         if (cur.dead) line.append(tag(t("Sign-in ran out"), "warn"));
         line.append(button(ready?.saves?.() ? t("Save and sign in") : cur.dead ? t("Sign in again") : t("Sign in"), "action", () => start()));

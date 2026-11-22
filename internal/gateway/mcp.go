@@ -202,6 +202,8 @@ func mcpRefused(w http.ResponseWriter, name string, err error) {
 	msg := err.Error()
 	if errors.Is(err, mcpauth.ErrExpired) || errors.Is(err, mcpauth.ErrNotSignedIn) {
 		msg = "magpie's sign-in to the MCP server " + name + " has run out: sign in to it again in magpie's Library"
+	} else if errors.Is(err, mcpauth.ErrRateLimited) {
+		status = http.StatusTooManyRequests
 	}
 	http.Error(w, msg, status)
 }

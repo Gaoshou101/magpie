@@ -721,6 +721,8 @@ func (b *backend) call(ctx context.Context, tool string, args json.RawMessage, m
 func healthErr(h ServerHealth) error {
 	var s string
 	switch {
+	case h.Why == "ratelimited":
+		s = "token renewal hit a rate limit: " + h.Detail
 	case h.State == "auth":
 		s = "it asks for a sign-in or a key: sign in to it, or give it its key, in magpie's Library"
 	case h.Why == "notfound":
