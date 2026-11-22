@@ -228,6 +228,7 @@ func httpsAt(t *testing.T, f *fakeSocketBackend, id, host, sock string) *atomic.
 	t.Cleanup(noRests)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	useProxy(t, "direct")
 	f.path = "/v1/responses"
 	var asked atomic.Int32
 	up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -414,5 +415,31 @@ func TestRelaySocketErrorGoesOverHTTP(t *testing.T) {
 	codexShunMu.Unlock()
 	if left := time.Until(until); left < codexRelayShun-time.Minute {
 		t.Errorf("left to HTTP for %s, want %s", left, codexRelayShun)
+	}
+}
+
+// A host's Resolve entry only rewrites direct connections; if a system or
+// environment proxy were left active, httpsAt/openAIAt would leave the sandbox
+// through that proxy instead of hitting the local httptest server.
+func TestHTTPSAtIgnoresProxy(t *testing.T) {
+	socketOn(t)
+	var proxied atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied.Add(1)
+		http.Error(w, "proxy reached from test", http.StatusForbidden)
+	}))
+	t.Cleanup(proxy.Close)
+	t.Setenv("ALL_PROXY", proxy.URL)
+
+	f := &fakeSocketBackend{keep: true, whole: true}
+	f.frames = keptReply(f)
+	asked := openAIAt(t, f, "")
+
+	relayPost(t, keptTurn("conv-1", "oai/m1", userPing))
+	if proxied.Load() != 0 {
+		t.Fatalf("test reached proxy %d times; want 0", proxied.Load())
+	}
+	if posts, sockets := f.counts(); posts != 0 || sockets != 1 || asked.Load() != 1 {
+		t.Fatalf("%d HTTP posts, %d socket turns on %d handshakes; want local fake backend", posts, sockets, asked.Load())
 	}
 }
