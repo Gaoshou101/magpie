@@ -1108,7 +1108,7 @@ func fetchPage(ctx context.Context, url, key string, anthropic bool, headers map
 		if input != nil {
 			m.Images = *input
 		}
-		m.Tiers = tiersOf(r.Tiers)
+		m.Tiers = TiersOf(r.Tiers)
 		var pr *Price
 		if len(r.Price) > 0 && json.Unmarshal(r.Price, &pr) == nil && pr != nil && pr.sane() {
 			m.Price = pr
@@ -1293,9 +1293,9 @@ func codexFacts(m *Model, r liveModel, raw json.RawMessage) {
 	}
 }
 
-// tiersOf are the ids of a list's service_tiers, as Codex's catalog
+// TiersOf are the ids of a list's service_tiers, as Codex's catalog
 // writes them ([{"id":"priority","name":"Fast"}]) or as plain ids.
-func tiersOf(v any) []string {
+func TiersOf(v any) []string {
 	xs, _ := v.([]any)
 	var out []string
 	for _, x := range xs {

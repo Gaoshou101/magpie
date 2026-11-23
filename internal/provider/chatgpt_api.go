@@ -603,6 +603,10 @@ func parseSIWCModels(b []byte) (out []catalog.Model, hidden []string) {
 			Levels      []struct {
 				Effort string `json:"effort"`
 			} `json:"supported_reasoning_levels"`
+			// service_tiers are the tiers the account's plan serves the
+			// model at (#7493); any, as an odd value mustn't lose the
+			// whole list
+			Tiers   any `json:"service_tiers"`
 			Context int `json:"context_window"`
 			Max     int `json:"max_context_window"`
 		} `json:"models"`
@@ -629,6 +633,9 @@ func parseSIWCModels(b []byte) (out []catalog.Model, hidden []string) {
 		for _, l := range m.Levels {
 			mm.Efforts = append(mm.Efforts, l.Effort)
 		}
+		// the tiers the account's plan serves the model at, kept for the
+		// gateway's list to tell them (#7493)
+		mm.Tiers = catalog.TiersOf(m.Tiers)
 		out = append(out, mm)
 	}
 	return out, hidden

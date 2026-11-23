@@ -1135,8 +1135,12 @@ func CodexTiersWith(m *catalog.Model, e Entry, members func(id string) []Member,
 	// another magpie offers the tiers its own Codex is offered on the
 	// model, and is sent the one Codex asks for as it is (#1234); a
 	// provider plugin, those it says its vendor serves the model at, and
-	// is sent the one Codex asks for when it is among them (#2514)
-	if e.Group == "" && (e.Provider.IsRemoteMagpie() || e.Provider.IsPlugin() && len(e.Tiers) > 0) {
+	// is sent the one Codex asks for when it is among them (#2514); a
+	// subscription account, those its own list advertises on the model
+	// (#7493: a ChatGPT account's /v1/models carries priority and
+	// ultrafast, which the list told and Codex was offered none of)
+	if e.Group == "" && (e.Provider.IsRemoteMagpie() || e.Provider.IsPlugin() && len(e.Tiers) > 0 ||
+		e.Provider.Account != nil && len(e.Tiers) > 0) {
 		m.Tiers = e.Tiers
 	}
 	if e.Group != "" {
