@@ -328,6 +328,7 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.Proxies = cur.Proxies                           // set on its own (proxies), the password never sent to the page
 	in.RequestArchive = cur.RequestArchive             // the Gateway page's, set on its own
 	in.RequestArchiveMaxMB = cur.RequestArchiveMaxMB   // in settings.json only
+	in.PluginCallLimit = cur.PluginCallLimit           // in settings.json only (#6976)
 	in.RequestArchiveMB = cur.RequestArchiveMB         // in settings.json only
 	in.ClaudeRunsMost = cur.ClaudeRunsMost             // magpie claude-code runs, or settings.json (#2956)
 	in.GatewayConversations = cur.GatewayConversations // Sessions' explicit recording consent

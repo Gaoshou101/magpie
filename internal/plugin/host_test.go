@@ -37,13 +37,14 @@ func newFakeHostLine(t *testing.T, maxLine int) *fakeHost {
 	t.Helper()
 	pr, pw := io.Pipe()
 	hctx, hcancel := context.WithCancel(context.Background())
+	lim := resolvedLimits()
 	h := &host{
 		cmd: &exec.Cmd{}, in: discardCloser{},
 		calls:    map[int64]*call{},
 		dead:     make(chan struct{}),
-		slots:    make(chan struct{}, callLimit()),
-		streams:  make(chan struct{}, streamLimit()),
-		out:      make(chan writeReq, callLimit()),
+		slots:    make(chan struct{}, lim.calls),
+		streams:  make(chan struct{}, lim.streams),
+		out:      make(chan writeReq, lim.out),
 		ctrl:     map[int64]*ctrl{},
 		ctrlWake: make(chan struct{}, 1),
 		ctx:      hctx,
@@ -265,12 +266,13 @@ func (failingIn) Close() error                { return nil }
 // park. The host's stdout staying open must not be needed to notice.
 func TestHostWriterFailureWakesWaiters(t *testing.T) {
 	hctx, hcancel := context.WithCancel(context.Background())
+	lim := resolvedLimits()
 	h := &host{
 		in: failingIn{}, calls: map[int64]*call{},
 		dead:     make(chan struct{}),
-		slots:    make(chan struct{}, callLimit()),
-		streams:  make(chan struct{}, streamLimit()),
-		out:      make(chan writeReq, callLimit()),
+		slots:    make(chan struct{}, lim.calls),
+		streams:  make(chan struct{}, lim.streams),
+		out:      make(chan writeReq, lim.out),
 		ctrl:     map[int64]*ctrl{},
 		ctrlWake: make(chan struct{}, 1),
 		ctx:      hctx,
@@ -310,13 +312,14 @@ func TestHostWriterFailureWakesWaiters(t *testing.T) {
 func TestHostWriteFailureWakesRPCAndHeadWaiters(t *testing.T) {
 	pr, pw := io.Pipe()
 	hctx, hcancel := context.WithCancel(context.Background())
+	lim := resolvedLimits()
 	h := &host{
 		cmd: &exec.Cmd{}, in: failingIn{},
 		calls:    map[int64]*call{},
 		dead:     make(chan struct{}),
-		slots:    make(chan struct{}, callLimit()),
-		streams:  make(chan struct{}, streamLimit()),
-		out:      make(chan writeReq, callLimit()),
+		slots:    make(chan struct{}, lim.calls),
+		streams:  make(chan struct{}, lim.streams),
+		out:      make(chan writeReq, lim.out),
 		ctrl:     map[int64]*ctrl{},
 		ctrlWake: make(chan struct{}, 1),
 		ctx:      hctx,

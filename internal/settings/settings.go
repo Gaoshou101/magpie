@@ -367,6 +367,14 @@ type Settings struct {
 	// GatewayConversations is local, opt-in recording of session traffic.
 	// Only SetGatewayConversations changes it; other saves keep local consent.
 	GatewayConversations bool `json:"gatewayConversations,omitempty"`
+	// PluginCallLimit is the most calls (streaming, RPC or retiring) one
+	// plugin host holds at once: 0 for the default that follows from the
+	// stream budget (callLimit), at least CallLimitLeast. A big plugin
+	// (hundreds of accounts, #6976) refuses bursts at the default and
+	// every refusal is a client try again; this computer's own
+	// (KeepOwn-like, settings.json), as its RAM is what backs the calls.
+	// Read through ResolvedCallLimit.
+	PluginCallLimit int `json:"pluginCallLimit,omitempty"`
 	// SessionReads is which agents' own session files magpie may read
 	// (RustCats on X: a first open listed every agent's history unasked).
 	// Nil is not settled yet (sessions.SettleReads decides it once). Only
@@ -1553,6 +1561,29 @@ func (s Settings) SearchPages() int {
 		return SearchCountDefault
 	}
 	return min(s.SearchCount, SearchCountMost)
+}
+
+// CallLimitDefault is the plugin host's call limit when PluginCallLimit
+// is unset, the one callLimit() works out from the stream budget, and
+// CallLimitLeast the least a written value is taken at: a limit under it
+// refuses more than the default would.
+const (
+	CallLimitDefault = 0
+	CallLimitLeast   = 1
+	// CallLimitMost bounds a written value: a channel's capacity is
+	// allocated at host start, so a hand-written huge one mustn't be
+	// taken whole (each slot is a call's queues, room enough already).
+	CallLimitMost = 4096
+)
+
+// ResolvedCallLimit is the plugin host's call limit: PluginCallLimit kept
+// in range, the stream budget's share plus the RPC reserve (callLimit, 0
+// here) when it is unset or out of range.
+func (s Settings) ResolvedCallLimit() int {
+	if s.PluginCallLimit < CallLimitLeast {
+		return 0
+	}
+	return min(s.PluginCallLimit, CallLimitMost)
 }
 
 // BusyLoadMost is past the highest BusyLoad: plugin.LoadMost, the most a

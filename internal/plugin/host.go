@@ -213,6 +213,24 @@ func callLimit() int { return streamLimit() + rpcReserve }
 // spent on one more stream.
 func streamLimit() int { return streamBudget / streamWindow }
 
+// resolvedLimits are the capacities one host's channels are built with, the
+// user's call limit (settings' PluginCallLimit, #6976) over the one the
+// stream budget works out. Read once at host start: a setting changed while
+// a host runs takes its next restart.
+type limits struct{ calls, streams, out int }
+
+func resolvedLimits() limits {
+	// the reserve is kept: streams take the raised limit less it, and the
+	// whole is never under the budget's own (its streams plus the reserve),
+	// so a full stream set always leaves the control path its slots (#6976)
+	n := settings.Load().ResolvedCallLimit()
+	if n <= 0 {
+		return limits{calls: callLimit(), streams: streamLimit(), out: callLimit()}
+	}
+	calls := max(n, streamLimit()+rpcReserve)
+	return limits{calls: calls, streams: max(calls-rpcReserve, 1), out: calls}
+}
+
 // push queues m for the call's reader, without waiting for it. It is false
 // when the call was given up on and m was not taken: a compliant child never
 // sends past the call's window, so this is a call already stopped, or a child
@@ -1156,13 +1174,14 @@ func startOn(ctx context.Context, bun string) (*host, bool, error) {
 		return nil, false, err
 	}
 	hctx, hcancel := context.WithCancel(context.Background())
+	lim := resolvedLimits()
 	h := &host{
 		cmd: cmd, in: in,
 		calls:    map[int64]*call{},
 		dead:     make(chan struct{}),
-		slots:    make(chan struct{}, callLimit()),
-		streams:  make(chan struct{}, streamLimit()),
-		out:      make(chan writeReq, callLimit()),
+		slots:    make(chan struct{}, lim.calls),
+		streams:  make(chan struct{}, lim.streams),
+		out:      make(chan writeReq, lim.out),
 		ctrl:     map[int64]*ctrl{},
 		ctrlWake: make(chan struct{}, 1),
 		ctx:      hctx,
