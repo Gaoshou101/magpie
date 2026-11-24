@@ -361,6 +361,29 @@ func (u *updater) check() {
 	}
 }
 
+// checkNow asks the feed in the background and waits until the feed lookup
+// leaves "checking" (or ctx / the wait budget expires), so POST
+// /api/update/check does not block across the full download (#7614).
+func (u *updater) checkNow(ctx context.Context) {
+	if u.begin() {
+		go u.run()
+	} else {
+		u.supersede()
+	}
+	for range recheckTicks {
+		if !u.asking() {
+			return
+		}
+		t := time.NewTimer(recheckTick)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // supersede notes a check that came while a download is under way: one
 // download runs at a time, and the one under way is finished rather than
 // thrown away (a slow network would never finish one, with a release
@@ -1014,7 +1037,7 @@ func updateRoutes(mux *http.ServeMux, w Windows) {
 	mux.HandleFunc("POST /api/update/check", func(rw http.ResponseWriter, r *http.Request) {
 		lang := askedLang(r)
 		updates.inLang(lang) // the check's notes are in the page's language
-		updates.check()
+		updates.checkNow(r.Context())
 		writeJSON(rw, updates.jsonIn(lang))
 	})
 	// install restarts into the staged version; after a failed download it
