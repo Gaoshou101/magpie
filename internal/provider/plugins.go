@@ -892,7 +892,11 @@ const SentModelHeader = "X-Magpie-Sent-Model"
 // {"type":"not_found_error","message":"model: claude-mythos-5-2"} — that
 // model rests on that account, not the account for all its models
 // (ZacharyZhang on X).
-var ModelUnserved = lazyre.New(`(?i)model.{0,80}(not (supported|accessible|available|found|enabled|allowed)|unsupported|does ?n[o']t exist|may not exist or you may not have access|unknown|invalid)|not_found_error.{0,40}"model: |(no such|unknown|invalid|unsupported) model|model_not_found|has no provider supported|deployment[ _]?not[ _]?found|deployment.{0,60}does ?n[o']t exist|模型.{0,12}(不存在|不支持|无权|未开通)`)
+var ModelUnserved = lazyre.New(`(?i)model.{0,80}(not (supported|accessible|available|found|enabled|allowed)|unsupported|does ?n[o']t exist|may not exist or you may not have access|unknown|invalid)` +
+	`|model(?:[\s:"'()]+[^\s,;!?()\[\]{}"']{1,64})?[\s:"'()]*(?:is |are )?(?:currently |temporarily |presently )?unavailable|(?:currently |temporarily )?unavailable model` +
+	`|not_found_error.{0,40}"model: |(no such|unknown|invalid|unsupported) model|model_not_found|has no provider supported|deployment[ _]?not[ _]?found|deployment.{0,60}does ?n[o']t exist` +
+	`|модел[ьи](?:[\s:"']+[^\s,;!?()\[\]{}"']{1,64})?[\s:"']*(?:сейчас |временно |в данный момент )?(?:недоступн[аоы]?|не найден[ао]?|не поддерживается|не существует)` +
+	`|模型.{0,12}(不存在|不支持|无权|未开通)|模型(?:[\s:"']*[^\s,;!?，。；：！？()\[\]{}"']{1,48})?[\s:"']*(?:当前|目前|暂时|暂)?(?:不存在|不支持|无权|未开通|不可用|未启用|已下线)`)
 
 // signInWords are words of a refusal about the sign-in itself, which a
 // model named beside them doesn't make the model's: "model gpt-x: invalid

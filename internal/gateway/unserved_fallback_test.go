@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -77,5 +80,85 @@ func TestGroupFailsOverAModelWithNoProvider(t *testing.T) {
 	}
 	if !modelRefused(400, []byte(modelscopeNoProvider400)) {
 		t.Errorf("modelRefused false: the model wouldn't rest alone on its key")
+	}
+}
+
+// A provider returning HTTP 400 with a localized or English "model is
+// currently unavailable" refusal (#7184: Russian "Модель ... сейчас недоступна")
+// must fail over to the group's next member and rest only that model on
+// that provider, while leaving other models on the same provider unblocked
+// and keeping service/endpoint-level outages out of modelRefused.
+func TestGroupFailsOverModelUnavailable400(t *testing.T) {
+	const russianUnavailable = "Модель deepseek-v4.1-flash сейчас недоступна.\nОткрой список моделей и выбери другую."
+
+	fresh(t)
+	a := &scripted{replies: []reply{{400, "text/plain; charset=utf-8", russianUnavailable}}}
+	aSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(bodyBytes), `"model":"other"`) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, chatOK)
+			return
+		}
+		a.ServeHTTP(w, r)
+	}))
+	t.Cleanup(aSrv.Close)
+	if err := provider.Save(provider.Provider{ID: "a", Name: "A", Key: "k", Models: []string{"m", "other"}, Chat: aSrv.URL + "/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	b := &scripted{replies: []reply{{200, "", chatOK}}}
+	scriptedOn(t, "b", provider.Chat, b)
+	if err := provider.SaveGroup(provider.Group{Name: "G", Members: []string{"a/m", "b/m"}, Routing: provider.Auto}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New()
+	code, body := postAs(t, s, "", `{"model":"group/g","messages":[{"role":"user","content":"hi"}]}`)
+	if code != 200 || !strings.Contains(body, "hello") || a.n != 1 || b.n != 1 {
+		t.Fatalf("first try: %d %s (a %d, b %d)", code, body, a.n, b.n)
+	}
+	r := s.trace.routes[len(s.trace.routes)-1]
+	if len(r.Tries) != 2 || r.Tries[0].Status != 400 || r.Tries[0].Fail != failOther {
+		t.Fatalf("tries %+v", r.Tries)
+	}
+	if rest := r.Tries[0].Rest; rest == nil || rest.Key != "a/m" {
+		t.Fatalf("expected only a/m to rest, got %+v", r.Tries[0].Rest)
+	}
+
+	// Next group request skips the rested a/m and goes directly to b/m.
+	code, body = postAs(t, s, "", `{"model":"group/g","messages":[{"role":"user","content":"hi"}]}`)
+	if code != 200 || !strings.Contains(body, "hello") || a.n != 1 || b.n != 2 {
+		t.Fatalf("second try: %d %s (a %d, b %d)", code, body, a.n, b.n)
+	}
+
+	// Other models on provider a remain unblocked.
+	code, body = postAs(t, s, "", `{"model":"a/other","messages":[{"role":"user","content":"hi"}]}`)
+	if code != 200 || !strings.Contains(body, "hello") {
+		t.Fatalf("sibling model a/other blocked unexpectedly: %d %s", code, body)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"russian model unavailable", 400, russianUnavailable, true},
+		{"english model currently unavailable", 400, `{"error":{"message":"Model deepseek-v4.1-flash is currently unavailable."}}`, true},
+		{"english model unavailable", 400, `{"error":{"message":"Model is unavailable"}}`, true},
+		{"chinese model unavailable with id", 400, `{"error":{"message":"模型 deepseek-v4.1-flash 当前不可用"}}`, true},
+		{"chinese model temp unavailable", 400, `{"error":{"message":"当前模型暂时不可用"}}`, true},
+		{"english model in parens unavailable", 400, `{"error":{"message":"The selected model (deepseek-v4.1-flash) is currently unavailable."}}`, true},
+		{"endpoint unavailable is not model unserved", 400, `{"error":{"message":"Endpoint is currently unavailable."}}`, false},
+		{"plain service unavailable is not model unserved", 400, `{"error":{"message":"service unavailable"}}`, false},
+		{"model prefix with service unavailable is not model unserved", 400, `{"error":{"message":"model gpt-4o: service is currently unavailable"}}`, false},
+		{"missing field stays non-retryable", 400, `{"error":{"message":"messages: field required"}}`, false},
+	} {
+		if got := retryable(tc.status, []byte(tc.body)); got != tc.want {
+			t.Errorf("%s: retryable(%d) = %v, want %v", tc.name, tc.status, got, tc.want)
+		}
+		if got := modelRefused(tc.status, []byte(tc.body)); got != tc.want {
+			t.Errorf("%s: modelRefused(%d) = %v, want %v", tc.name, tc.status, got, tc.want)
+		}
 	}
 }
