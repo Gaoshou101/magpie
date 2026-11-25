@@ -28,6 +28,22 @@ func isSelf(s *Server) bool {
 	return !s.Remote() && len(s.Args) >= 2 && s.Args[0] == "mcp" && s.Args[1] == "image"
 }
 
+// isBuiltinWSL is whether s is one of magpie's built-in `mcp <subcommand>`
+// servers that WSL can start through interop using its distro path.
+func isBuiltinWSL(s *Server) bool {
+	if isSelf(s) {
+		return true
+	}
+	if !ownServer(s) || len(s.Args) < 2 {
+		return false
+	}
+	switch s.Args[1] {
+	case "browser", "search", "vision", "memory", "sessions", "artifacts":
+		return true
+	}
+	return false
+}
+
 // side is s as the file's agent is given it: magpie's own server, for an
 // agent in WSL, by the binary's path there; an error says why the agent
 // can't start s.
@@ -35,7 +51,7 @@ func (f *mcpFile) side(s *Server) (*Server, error) {
 	if !f.WSL || s.Remote() || !windowsPath.MatchString(s.Command) {
 		return s, nil
 	}
-	if !isSelf(s) || f.Distro == "" {
+	if !isBuiltinWSL(s) || f.Distro == "" {
 		return nil, fmt.Errorf("it runs a Windows program (%s), which an agent in WSL can't start: give it a command WSL has", s.Command)
 	}
 	exe, mount, err := wslExe(f.Distro, s.Command)
@@ -44,12 +60,16 @@ func (f *mcpFile) side(s *Server) (*Server, error) {
 	}
 	c := *s
 	c.Command = exe
-	c.Args = []string{"mcp", "image", "--wsl", f.Distro}
-	if mount != "/mnt/" {
-		c.Args = append(c.Args, "--mount", mount)
-	}
-	if f.Home != "" {
-		c.Args = append(c.Args, "--home", f.Home)
+	if isSelf(s) {
+		c.Args = []string{"mcp", "image", "--wsl", f.Distro}
+		if mount != "/mnt/" {
+			c.Args = append(c.Args, "--mount", mount)
+		}
+		if f.Home != "" {
+			c.Args = append(c.Args, "--home", f.Home)
+		}
+	} else {
+		c.Args = slices.Clone(s.Args)
 	}
 	if len(s.Env) > 0 {
 		// a Windows program is given only the variables WSLENV names
