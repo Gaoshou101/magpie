@@ -3059,6 +3059,15 @@ func resumeCommand(distro, agent, id, cwd, path string) string {
 	switch agent {
 	case "claude":
 		run = "claude --resume " + id
+		if distro == "" {
+			if dir := claudeConfigDir(path); dir != "" {
+				if runtime.GOOS == "windows" {
+					run = "$__claude_cfg = $env:CLAUDE_CONFIG_DIR; try { $env:CLAUDE_CONFIG_DIR = " + psQuote(dir) + "; " + run + " } finally { $env:CLAUDE_CONFIG_DIR = $__claude_cfg }"
+				} else {
+					run = "CLAUDE_CONFIG_DIR=" + shellQuote(dir) + " " + run
+				}
+			}
+		}
 	case "codex":
 		run = "codex resume " + id
 	case "opencode":
@@ -3115,12 +3124,36 @@ func resumeCommand(distro, agent, id, cwd, path string) string {
 		return run
 	}
 	if runtime.GOOS == "windows" {
-		return "Set-Location -LiteralPath '" + strings.ReplaceAll(cwd, "'", "''") + "'; " + run
+		return "Set-Location -LiteralPath " + psQuote(cwd) + "; " + run
 	}
 	return "cd " + shellQuote(cwd) + " && " + run
 }
 
+var psSingleQuotes = strings.NewReplacer(
+	"'", "''",
+	"\u2018", "\u2018\u2018",
+	"\u2019", "\u2019\u2019",
+	"\u201a", "\u201a\u201a",
+	"\u201b", "\u201b\u201b",
+)
+
+func psQuote(s string) string { return "'" + psSingleQuotes.Replace(s) + "'" }
+
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// claudeConfigDir is path's Claude config folder when path is under one other
+// than ClaudeDir(), "" for the default folder (or a link to it).
+func claudeConfigDir(path string) string {
+	if path == "" {
+		return ""
+	}
+	dir := filepath.Clean(claudeDirOf(path))
+	def := filepath.Clean(ClaudeDir())
+	if dir == def || (runtime.GOOS == "windows" && strings.EqualFold(dir, def)) || sameFolder(dir, def) {
+		return ""
+	}
+	return dir
+}
 
 // Find is a session by agent and id: a listed one, else one Get finds
 // under agent:id. One nothing was said in is found too, as ListAgent lists
