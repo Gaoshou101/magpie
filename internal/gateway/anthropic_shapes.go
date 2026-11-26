@@ -818,9 +818,11 @@ func withRefsAsText(body []byte) []byte {
 // deferredOutUpFront is a provider sent no deferred-tool block from the
 // first ask (withoutDeferredTools), as forwardOnce sends it: Kimi's
 // Anthropic endpoint turns the whole request away with a 400 that names
-// nothing to learn from (#2042), DeepSeek's own takes a tool_addition at
-// no position (#5404), and OpenCode's DeepSeek route hides the refusal
-// behind a 422 "Endpoint is unavailable.".
+// nothing to learn from (#2042), Alibaba Cloud's DashScope / Bailian
+// Anthropic endpoints answer with a generic 400 "Request body format
+// invalid" (#7776), DeepSeek's own takes a tool_addition at no position
+// (#5404), and OpenCode's DeepSeek route hides the refusal behind a 422
+// "Endpoint is unavailable.".
 func deferredOutUpFront(p provider.Provider, to provider.Protocol, body []byte) bool {
-	return isKimi(p, to) || isDeepSeekAnthropic(p, to) || p.IsOpenCode() && strings.Contains(strings.ToLower(modelOf(body)), "deepseek")
+	return isKimi(p, to) || dashScope(p) || isDeepSeekAnthropic(p, to) || p.IsOpenCode() && strings.Contains(strings.ToLower(modelOf(body)), "deepseek")
 }

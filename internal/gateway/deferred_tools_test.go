@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -421,5 +422,219 @@ func TestDeepSeekAnthropicIsStrippedUpFront(t *testing.T) {
 	}
 	if !strings.Contains(sent[0], `"tool_name":"Read"`) || !strings.Contains(sent[0], `"name":"Read","description":"read a file"`) {
 		t.Errorf("the ToolSearch answer did not go as a declared reference: %s", sent[0])
+	}
+}
+
+// bailianDeferredVendor answers as Alibaba Cloud Bailian's /apps/anthropic
+// endpoint does (#7776): any top-level deferred-tool block (tool_addition,
+// tool_removal, or message-level tool_reference) triggers a generic 400
+// "Request body format invalid" with no field name, while a tool_reference
+// inside a tool_result is accepted.
+type bailianDeferredVendor struct {
+	mu     sync.Mutex
+	bodies []string
+}
+
+func (v *bailianDeferredVendor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	b, _ := io.ReadAll(r.Body)
+	v.mu.Lock()
+	v.bodies = append(v.bodies, string(b))
+	v.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	var m struct {
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	json.Unmarshal(b, &m)
+	for _, msg := range m.Messages {
+		var blocks []struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(msg.Content, &blocks) != nil {
+			continue
+		}
+		for _, bl := range blocks {
+			if deferredBlock(bl.Type) {
+				w.WriteHeader(400)
+				io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"Request body format invalid"}}`)
+				return
+			}
+		}
+	}
+	if strings.HasSuffix(r.URL.Path, "/count_tokens") {
+		io.WriteString(w, `{"input_tokens":12}`)
+		return
+	}
+	io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"deepseek-v4.1-flash-1017","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+}
+
+func (v *bailianDeferredVendor) sent() []string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return append([]string(nil), v.bodies...)
+}
+
+// #7776 (mengliansheng): Bailian Token Plan's /apps/anthropic endpoint rejects
+// tool_addition (and other top-level deferred-tool blocks) with a generic 400
+// "Request body format invalid" that names no field to learn from. DashScope /
+// Bailian / Qwen Cloud providers (preset or host) strip those blocks up front,
+// hoisting any inline-only tool_definition to top-level tools and keeping
+// ToolSearch's tool_reference inside tool_result; count_tokens strips them too.
+// Unrelated Anthropic providers keep them untouched.
+func TestDashScopeIsSentNoDeferredToolBlocks(t *testing.T) {
+	fresh(t)
+	up := &bailianDeferredVendor{}
+	srv := httptest.NewServer(up)
+	t.Cleanup(srv.Close)
+	other := &bailianDeferredVendor{}
+	otherSrv := httptest.NewServer(other)
+	t.Cleanup(otherSrv.Close)
+
+	if err := provider.Save(provider.Provider{
+		ID:        "bailian-token-plan",
+		Name:      "Bailian Token Plan",
+		Preset:    "bailian-token-plan",
+		Key:       "k",
+		Anthropic: srv.URL + "/apps/anthropic",
+		Models:    []string{"deepseek-v4.1-flash-1017"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Also test a custom provider matched only by its DashScope/Bailian host.
+	if err := provider.Save(provider.Provider{
+		ID:        "bailian-custom",
+		Name:      "Bailian Custom",
+		Key:       "k",
+		Anthropic: "http://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+		Models:    []string{"qwen3-coder-plus"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Save(provider.Provider{
+		ID:        "other",
+		Name:      "Other",
+		Key:       "k",
+		Anthropic: otherSrv.URL,
+		Models:    []string{"claude-sonnet-4-5"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New()
+	srvAddr := strings.TrimPrefix(srv.URL, "http://")
+	otherAddr := strings.TrimPrefix(otherSrv.URL, "http://")
+	s.client = &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, network, host string) (net.Conn, error) {
+		switch host {
+		case "token-plan.cn-beijing.maas.aliyuncs.com:80", "token-plan.cn-beijing.maas.aliyuncs.com:443", srvAddr:
+			return (&net.Dialer{}).DialContext(ctx, network, srvAddr)
+		case otherAddr:
+			return (&net.Dialer{}).DialContext(ctx, network, otherAddr)
+		default:
+			return nil, fmt.Errorf("unexpected outbound dial in test: %s", host)
+		}
+	}}}
+
+	reporter := `{"model":"bailian-token-plan/deepseek-v4.1-flash-1017","max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"hi"},{"type":"tool_addition","tool":{"type":"tool_definition","definition":{"name":"Artifact","description":"d","input_schema":{"type":"object","properties":{}}}}}]}]}`
+
+	cases := map[string]struct {
+		path string
+		body string
+	}{
+		"reporter repro":           {"/v1/messages", reporter},
+		"reporter count_tokens":    {"/v1/messages/count_tokens", reporter},
+		"custom host addition":     {"/v1/messages", deferredBody("bailian-custom/qwen3-coder-plus", ccAddDef)},
+		"removal":                  {"/v1/messages", deferredBody("bailian-token-plan/deepseek-v4.1-flash-1017", ccRemove)},
+		"message's tool_reference": {"/v1/messages", deferredBody("bailian-token-plan/deepseek-v4.1-flash-1017", `{"type":"tool_reference","tool_name":"Read"}`)},
+	}
+
+	h := s.Handler()
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			n := len(up.sent())
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body)))
+			if rec.Code != 200 {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body)
+			}
+			sent := up.sent()[n:]
+			if len(sent) != 1 {
+				t.Fatalf("Bailian was asked %d times, want once", len(sent))
+			}
+			got := sent[0]
+			for _, b := range []string{`"tool_addition"`, `"tool_removal"`} {
+				if strings.Contains(got, b) {
+					t.Errorf("Bailian was sent %s: %s", b, got)
+				}
+			}
+			var req struct {
+				Tools []struct {
+					Name string `json:"name"`
+				} `json:"tools"`
+				Messages []struct {
+					Content json.RawMessage `json:"content"`
+				} `json:"messages"`
+			}
+			if err := json.Unmarshal([]byte(got), &req); err != nil {
+				t.Fatalf("unmarshal forwarded request: %v", err)
+			}
+			for _, msg := range req.Messages {
+				var arr []json.RawMessage
+				if json.Unmarshal(msg.Content, &arr) == nil && len(arr) == 0 {
+					t.Errorf("a message left empty was sent: %s", got)
+				}
+			}
+			if name == "reporter repro" || name == "reporter count_tokens" {
+				hasArtifact := false
+				for _, tool := range req.Tools {
+					if tool.Name == "Artifact" {
+						hasArtifact = true
+					}
+				}
+				if !hasArtifact {
+					t.Errorf("inline Artifact definition was not hoisted to top-level tools: %s", got)
+				}
+				if !strings.Contains(got, `"text":"hi"`) {
+					t.Errorf("user text was lost: %s", got)
+				}
+			} else {
+				foundToolResultRef := false
+				for _, msg := range req.Messages {
+					var blocks []struct {
+						Type    string `json:"type"`
+						Content []struct {
+							Type     string `json:"type"`
+							ToolName string `json:"tool_name"`
+						} `json:"content"`
+					}
+					if json.Unmarshal(msg.Content, &blocks) != nil {
+						continue
+					}
+					for _, b := range blocks {
+						if b.Type != "tool_result" {
+							continue
+						}
+						for _, c := range b.Content {
+							if c.Type == "tool_reference" && c.ToolName == "Read" {
+								foundToolResultRef = true
+							}
+						}
+					}
+				}
+				if !foundToolResultRef {
+					t.Errorf("ToolSearch tool_result reference was not preserved in tool_result: %s", got)
+				}
+			}
+		})
+	}
+
+	// Non-DashScope Anthropic endpoint still receives deferred-tool blocks as sent.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(deferredBody("other/claude-sonnet-4-5", ccAddRef))))
+	if rec.Code != 400 {
+		t.Fatalf("unrelated provider status %d, want 400 from bailianDeferredVendor: %s", rec.Code, rec.Body)
+	}
+	if got := other.sent(); len(got) != 1 || !strings.Contains(got[0], `"tool_addition"`) {
+		t.Fatalf("unrelated provider should receive tool_addition untouched: %q", got)
 	}
 }

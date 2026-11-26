@@ -6792,7 +6792,10 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		if deferredOutUpFront(p, to, body) {
 			// Claude Code's deferred-tool blocks, for which Kimi's
 			// Anthropic endpoint turns the whole request away with a 400
-			// that names nothing to learn from (#2042). DeepSeek's own
+			// that names nothing to learn from (#2042) and Alibaba
+			// Cloud's DashScope / Bailian Anthropic endpoints answer with
+			// a generic 400 "Request body format invalid" (#7776).
+			// DeepSeek's own
 			// Anthropic endpoint now takes a tool_addition at no position
 			// it can appear in (#5404, a 2026-11-05 check against
 			// api.deepseek.com), so its blocks come out up front too,
