@@ -399,6 +399,11 @@ type mcpFile struct {
 	// NoCmdRefs: the agent reads no reference in a command or its args,
 	// whatever its format's other agents do (Droid's, cmdRefs)
 	NoCmdRefs bool
+	// NoHubMeta: OmO shares fmtPiNative with Pi, but its ServerSchema
+	// refuses description and toolExposure (additionalProperties: false),
+	// so the router and Artifacts entries leave them out (hubServerFor,
+	// piDirect)
+	NoHubMeta bool
 }
 
 // files are every file the servers are written into.
@@ -627,7 +632,10 @@ func (f *mcpFile) behind(s *Server, old map[string]any) bool {
 	if f.Format == fmtCodex && slices.ContainsFunc(codexRefused(s), func(k string) bool { _, ok := old[k]; return ok }) {
 		return true
 	}
-	if f.Format == fmtPiNative && old != nil && len(piDirect(s)) > 0 && (!piExposed(old) || piDirectBefore(s, old)) {
+	if f.Format == fmtPiNative && !f.NoHubMeta && old != nil && len(piDirect(s)) > 0 && (!piExposed(old) || piDirectBefore(s, old)) {
+		return true
+	}
+	if f.Format == fmtPiNative && f.NoHubMeta && old != nil && slices.ContainsFunc(hubMetaRefused(s), func(k string) bool { _, ok := old[k]; return ok }) {
 		return true
 	}
 	if selfTimeout(s, 0) == 0 {
@@ -794,10 +802,10 @@ func (f *mcpFile) encode(s *Server) ordered {
 			add("args", list(s.Args))
 			optional("env", s.Env)
 		}
-		if s.about != "" {
+		if !f.NoHubMeta && s.about != "" {
 			add("description", s.about)
 		}
-		if d := piDirect(s); len(d) > 0 {
+		if d := piDirect(s); !f.NoHubMeta && len(d) > 0 {
 			ex := map[string]any{}
 			for _, n := range d {
 				ex[n] = "direct"
@@ -1182,7 +1190,7 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 			local(str(m, "command"), m["args"], m["env"])
 		}
 		// the hub entry's description is magpie's; any other is the user's
-		if f.Format == fmtPiNative && name == HubEntry {
+		if f.Format == fmtPiNative && !f.NoHubMeta && name == HubEntry {
 			s.about = str(m, "description")
 		}
 	case fmtKiro, fmtTrae:
@@ -1532,7 +1540,7 @@ var owned = map[mcpFormat][]string{
 // whose library entry has none stays theirs.
 func (f *mcpFile) mine(s *Server) []string {
 	own := owned[f.Format]
-	if f.Format == fmtPiNative && s.Name == HubEntry {
+	if f.Format == fmtPiNative && !f.NoHubMeta && s.Name == HubEntry {
 		own = append(slices.Clone(own), "description")
 	}
 	if extra := f.refKeys(s); len(extra) > 0 {
@@ -1595,13 +1603,13 @@ func (f *mcpFile) merged(s *Server, old map[string]any) ordered {
 	}
 	// an exposure of the user's says how the server's tools reach Pi's
 	// model, each of them
-	if f.Format == fmtPiNative && old != nil {
+	if f.Format == fmtPiNative && !f.NoHubMeta && old != nil {
 		if _, ok := old["exposure"]; ok {
 			o = slices.DeleteFunc(o, func(e kv) bool { return e.k == "toolExposure" })
 		}
 	}
 	// a toolExposure magpie wrote before it named more tools is magpie's
-	ownExposure := f.Format == fmtPiNative && old != nil && piDirectBefore(s, old)
+	ownExposure := f.Format == fmtPiNative && !f.NoHubMeta && old != nil && piDirectBefore(s, old)
 	for i, e := range o {
 		if v, ok := old[e.k]; ok && !slices.Contains(mine, e.k) && !(behind && f.Format == fmtGoose && e.k == "timeout") && !(ownExposure && e.k == "toolExposure") {
 			o[i].v = v
@@ -1617,8 +1625,11 @@ func (f *mcpFile) merged(s *Server, old map[string]any) ordered {
 	}
 	keys := slices.Sorted(maps.Keys(old))
 	var refused []string
-	if f.Format == fmtCodex {
+	switch {
+	case f.Format == fmtCodex:
 		refused = codexRefused(s)
+	case f.Format == fmtPiNative && f.NoHubMeta:
+		refused = hubMetaRefused(s)
 	}
 	for _, k := range keys {
 		if slices.Contains(mine, k) || slices.ContainsFunc(o, func(e kv) bool { return e.k == k }) || slices.Contains(refused, k) {
@@ -1642,6 +1653,20 @@ func codexRefused(s *Server) []string {
 		return []string{"args", "env", "env_vars", "cwd"}
 	}
 	return []string{"url", "bearer_token_env_var", "http_headers", "env_http_headers", "http_headers_helper", "oauth", "oauth_resource", "auth"}
+}
+
+// hubMetaRefused are Pi-only keys that earlier magpie versions may have
+// written into an OmO mcp.json on the router or direct Artifacts entry.
+// OmO's ServerSchema refuses them, so re-syncing strips them on those
+// managed entries while leaving user-owned keys on other servers alone.
+func hubMetaRefused(s *Server) []string {
+	if s.Name == HubEntry {
+		return []string{"description", "toolExposure"}
+	}
+	if serverKey(s) == artifactsKey {
+		return []string{"toolExposure"}
+	}
+	return nil
 }
 
 // put writes the server into the file, in place of one by its name.

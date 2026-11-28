@@ -119,7 +119,7 @@ func (l *Library) hubServerFor(t *Target) *Server {
 	// description gives that prompt its line of what the hub serves
 	// (extensions/mcp, serverSummary): told the router's instructions
 	// alone, a Pi asked about a repository never saw DeepWiki (11-01)
-	if t.MCP != nil && t.MCP.Format == fmtPiNative {
+	if t.MCP != nil && t.MCP.Format == fmtPiNative && !t.MCP.NoHubMeta {
 		ss := l.hubServers(t.Agent.ID)
 		s.about = gateway.HubLine(hubAbouts(ss))
 		for _, a := range ss {

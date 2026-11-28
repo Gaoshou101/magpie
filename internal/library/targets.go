@@ -296,7 +296,7 @@ func targetOf(a *agent.Agent) *Target {
 		d := a.Dir
 		t.Instructions = firstThere(d, "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
 		t.Override = filepath.Join(d, "AGENTS.override.md")
-		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtPiNative}
+		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtPiNative, NoHubMeta: true}
 		t.Skills = filepath.Join(d, "skills")
 	case "mu":
 		// mu is Pi 1.4.0 (packages/coding-agent, qybaihe/mu b71cd18) on
@@ -897,7 +897,7 @@ func wslTargetOf(a *agent.Agent) *Target {
 		d := j(h, ".omo", "agent")
 		t.Instructions = firstThere(d, "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
 		t.Override = filepath.Join(d, "AGENTS.override.md")
-		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtPiNative}
+		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtPiNative, NoHubMeta: true}
 		t.Skills = filepath.Join(d, "skills")
 	case "mu":
 		d := j(h, ".mu", "agent")
